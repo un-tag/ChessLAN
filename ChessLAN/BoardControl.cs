@@ -10,8 +10,8 @@ namespace ChessLAN
 {
     public class BoardControl : UserControl
     {
-        private const int SquareSize = 60;
-        private const int BoardPixels = SquareSize * 8;
+        private int SquareSize => Width / 8;
+        private int BoardPixels => SquareSize * 8;
 
         private static readonly Color LightSquare = ColorTranslator.FromHtml("#F0D9B5");
         private static readonly Color DarkSquare = ColorTranslator.FromHtml("#B58863");
@@ -25,12 +25,16 @@ namespace ChessLAN
         public PieceColor MyColor { get; set; } = PieceColor.White;
         public bool IsMyTurn { get; set; }
         public bool AllowPremoves { get; set; } = true;
+        public bool ShowLegalMoves { get; set; } = true;
 
         public event Action<Move>? MoveMade;
         public event Action<Move>? PremoveMade;
 
         private (int Row, int Col)? _dragFrom;
+        private (int Row, int Col)? _selectedSquare; // For click-to-move
         private Point _dragPoint;
+        private bool _isDragging; // True if mouse moved enough to count as drag
+        private Point _mouseDownPoint;
         private List<Move>? _legalMoves;
         private Move? _lastMove;
         private Move? _premove;
@@ -52,9 +56,16 @@ namespace ChessLAN
         public BoardControl()
         {
             DoubleBuffered = true;
-            Width = BoardPixels;
-            Height = BoardPixels;
             _pieceFont = new Font("Segoe UI Symbol", 36f, FontStyle.Regular, GraphicsUnit.Point);
+            Resize += (s, e) => UpdatePieceFont();
+        }
+
+        private void UpdatePieceFont()
+        {
+            _pieceFont?.Dispose();
+            float fontSize = SquareSize * 0.6f;
+            _pieceFont = new Font("Segoe UI Symbol", fontSize, FontStyle.Regular, GraphicsUnit.Point);
+            Invalidate();
         }
 
         public void SetLastMove(Move move)
@@ -207,7 +218,7 @@ namespace ChessLAN
             }
 
             // Draw legal move indicators
-            if (_dragFrom.HasValue && _legalMoves != null)
+            if (ShowLegalMoves && (_dragFrom.HasValue || _selectedSquare.HasValue) && _legalMoves != null)
             {
                 foreach (var move in _legalMoves)
                 {
@@ -238,8 +249,8 @@ namespace ChessLAN
             {
                 for (int c = 0; c < 8; c++)
                 {
-                    // Skip the piece being dragged
-                    if (_dragFrom.HasValue && _dragFrom.Value.Row == r && _dragFrom.Value.Col == c)
+                    // Skip the piece being dragged (only when visually dragging)
+                    if (_isDragging && _dragFrom.HasValue && _dragFrom.Value.Row == r && _dragFrom.Value.Col == c)
                         continue;
 
                     // Skip the piece being animated at its source
@@ -263,8 +274,15 @@ namespace ChessLAN
                 DrawPiece(g, _animPiece, x, y);
             }
 
+            // Draw selected square highlight
+            if (_selectedSquare.HasValue && !_isDragging)
+            {
+                DrawSquareHighlight(g, _selectedSquare.Value.Row, _selectedSquare.Value.Col,
+                    Color.FromArgb(100, 100, 200, 100));
+            }
+
             // Draw dragged piece on top
-            if (_dragFrom.HasValue)
+            if (_dragFrom.HasValue && _isDragging)
             {
                 var piece = Board.GetPiece(_dragFrom.Value.Row, _dragFrom.Value.Col);
                 if (!piece.IsEmpty)
@@ -376,9 +394,54 @@ namespace ChessLAN
             var (boardRow, boardCol) = DisplayToBoard(displayRow, displayCol);
             var piece = Board.GetPiece(boardRow, boardCol);
 
+            // If we already have a selected piece (click-to-move mode), try to move there
+            if (_selectedSquare.HasValue && _legalMoves != null)
+            {
+                var from = _selectedSquare.Value;
+
+                // Clicking the same square deselects
+                if (from.Row == boardRow && from.Col == boardCol)
+                {
+                    _selectedSquare = null;
+                    _legalMoves = null;
+                    Invalidate();
+                    return;
+                }
+
+                // Try to find a matching move to this destination
+                var matchingMoves = _legalMoves.Where(m => m.ToRow == boardRow && m.ToCol == boardCol).ToList();
+                if (matchingMoves.Count > 0)
+                {
+                    // Execute the move
+                    _selectedSquare = null;
+                    ExecuteMove(matchingMoves);
+                    return;
+                }
+
+                // Clicking a different own piece: switch selection
+                if (!piece.IsEmpty && piece.Color == MyColor)
+                {
+                    _selectedSquare = (boardRow, boardCol);
+                    _legalMoves = IsMyTurn ? Board.GetLegalMoves(boardRow, boardCol)
+                                           : (AllowPremoves ? GetPremoveCandidates(boardRow, boardCol) : null);
+                    _dragFrom = (boardRow, boardCol);
+                    _isDragging = false;
+                    _mouseDownPoint = e.Location;
+                    _dragPoint = e.Location;
+                    Invalidate();
+                    return;
+                }
+
+                // Clicking empty/enemy square that's not a legal move: deselect
+                _selectedSquare = null;
+                _legalMoves = null;
+                Invalidate();
+                return;
+            }
+
+            // No selection yet — pick up a piece
             if (piece.IsEmpty) return;
 
-            // Only allow picking up own pieces (or any piece for premoves when not my turn)
             if (IsMyTurn)
             {
                 if (piece.Color != MyColor) return;
@@ -387,7 +450,6 @@ namespace ChessLAN
             else if (AllowPremoves)
             {
                 if (piece.Color != MyColor) return;
-                // For premoves, show all pseudo-legal destinations (we use legal moves from a cloned board with forced turn)
                 _legalMoves = GetPremoveCandidates(boardRow, boardCol);
             }
             else
@@ -395,7 +457,10 @@ namespace ChessLAN
                 return;
             }
 
+            _selectedSquare = (boardRow, boardCol);
             _dragFrom = (boardRow, boardCol);
+            _isDragging = false;
+            _mouseDownPoint = e.Location;
             _dragPoint = e.Location;
             Invalidate();
         }
@@ -477,6 +542,16 @@ namespace ChessLAN
             base.OnMouseMove(e);
             if (_dragFrom.HasValue)
             {
+                // Only start visual drag after moving a few pixels (to distinguish from click)
+                if (!_isDragging)
+                {
+                    int dx = Math.Abs(e.X - _mouseDownPoint.X);
+                    int dy = Math.Abs(e.Y - _mouseDownPoint.Y);
+                    if (dx > 5 || dy > 5)
+                        _isDragging = true;
+                    else
+                        return;
+                }
                 _dragPoint = e.Location;
                 Invalidate();
             }
@@ -487,10 +562,22 @@ namespace ChessLAN
             base.OnMouseUp(e);
             if (!_dragFrom.HasValue) return;
 
+            // If not dragging (just clicked), keep the selection for click-to-move
+            if (!_isDragging)
+            {
+                _dragFrom = null;
+                // _selectedSquare and _legalMoves remain set for click-to-move
+                Invalidate();
+                return;
+            }
+
+            // Drag-and-drop release
             int displayCol = e.X / SquareSize;
             int displayRow = e.Y / SquareSize;
 
             _dragFrom = null;
+            _selectedSquare = null;
+            _isDragging = false;
 
             if (displayCol < 0 || displayCol >= 8 || displayRow < 0 || displayRow >= 8)
             {
@@ -517,10 +604,14 @@ namespace ChessLAN
                 return;
             }
 
+            ExecuteMove(matchingMoves);
+        }
+
+        private void ExecuteMove(List<Move> matchingMoves)
+        {
             Move selectedMove;
             if (matchingMoves.Count > 1 && matchingMoves.Any(m => m.Promotion != PieceType.None))
             {
-                // Promotion - ask user
                 var promoType = ShowPromotionDialog();
                 var found = matchingMoves.FirstOrDefault(m => m.Promotion == promoType);
                 if (found.Promotion == PieceType.None && promoType != PieceType.None)
@@ -534,6 +625,9 @@ namespace ChessLAN
             {
                 selectedMove = matchingMoves[0];
             }
+
+            _legalMoves = null;
+            _selectedSquare = null;
 
             if (IsMyTurn)
             {

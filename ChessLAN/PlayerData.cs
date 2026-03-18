@@ -12,7 +12,7 @@ namespace ChessLAN
     {
         public string Id { get; set; } = Guid.NewGuid().ToString();
         public string Name { get; set; } = "";
-        public int Elo { get; set; } = 1200;
+        public int Elo { get; set; } = 400;
     }
 
     public class GameRecord
@@ -36,7 +36,7 @@ namespace ChessLAN
     {
         public string Id { get; set; } = "";
         public string Name { get; set; } = "";
-        public int Elo { get; set; } = 1200;
+        public int Elo { get; set; } = 400;
         public List<GameRecord> Games { get; set; } = new();
     }
 

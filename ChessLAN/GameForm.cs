@@ -35,6 +35,8 @@ namespace ChessLAN
         private List<Piece> _capturedByOpponent = new();
         private bool _rematchRequested;
         private bool _opponentRematchRequested;
+        private AppSettings _settings;
+        private CheckBox _showMovesCheckBox = null!;
 
         public GameForm(NetworkManager network, PlayerDataStore playerData,
                         PieceColor myColor, string opponentId, string opponentName,
@@ -47,6 +49,8 @@ namespace ChessLAN
             _opponentName = opponentName;
             _opponentElo = opponentElo;
             _timeControl = timeControl;
+
+            _settings = AppSettings.Load();
 
             _board = new ChessBoard();
             _board.SetupInitialPosition();
@@ -69,31 +73,41 @@ namespace ChessLAN
         private void InitializeUI()
         {
             Text = $"ChessLAN - {_playerData.Me.Name} vs {_opponentName}";
-            Size = new Size(816, 560);
-            StartPosition = FormStartPosition.CenterScreen;
-            FormBorderStyle = FormBorderStyle.FixedSingle;
-            MaximizeBox = false;
+            WindowState = FormWindowState.Maximized;
+            FormBorderStyle = FormBorderStyle.Sizable;
             BackColor = Color.FromArgb(40, 40, 40);
+            KeyPreview = true;
+            KeyDown += (s, ev) => { if (ev.KeyCode == Keys.Escape) Close(); };
+
+            // Calculate board size to fit screen height
+            var screen = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
+            int boardSize = Math.Min(screen.Height - 40, screen.Width - 350);
+            boardSize = (boardSize / 8) * 8; // Round to multiple of 8
 
             // Board control
             _boardControl = new BoardControl
             {
-                Location = new Point(12, 12),
-                Size = new Size(480, 480)
+                Location = new Point(20, (screen.Height - boardSize) / 2 - 20),
+                Size = new Size(boardSize, boardSize),
+                ShowLegalMoves = _settings.ShowLegalMoves
             };
             Controls.Add(_boardControl);
 
             // Right panel
-            int panelX = 504;
-            int panelWidth = 290;
+            int panelX = _boardControl.Right + 30;
+            int panelWidth = 300;
+
+            int boardTop = _boardControl.Top;
+            int boardBottom = _boardControl.Bottom;
+            int panelMidY = (boardTop + boardBottom) / 2;
 
             // Opponent name + Elo
             _opponentNameLabel = new Label
             {
                 Text = $"{_opponentName} ({_opponentElo})",
-                Location = new Point(panelX, 12),
-                Size = new Size(panelWidth, 24),
-                Font = new Font("Segoe UI", 11f, FontStyle.Bold),
+                Location = new Point(panelX, boardTop),
+                Size = new Size(panelWidth, 28),
+                Font = new Font("Segoe UI", 12f, FontStyle.Bold),
                 ForeColor = Color.White,
                 TextAlign = ContentAlignment.MiddleLeft
             };
@@ -104,43 +118,34 @@ namespace ChessLAN
             {
                 Text = FormatTime(_myColor == PieceColor.White
                     ? _clock.BlackTime : _clock.WhiteTime),
-                Location = new Point(panelX, 38),
-                Size = new Size(panelWidth, 50),
-                Font = new Font("Consolas", 26f, FontStyle.Bold),
+                Location = new Point(panelX, boardTop + 32),
+                Size = new Size(panelWidth, 55),
+                Font = new Font("Consolas", 28f, FontStyle.Bold),
                 ForeColor = Color.White,
                 BackColor = Color.FromArgb(60, 60, 60),
                 TextAlign = ContentAlignment.MiddleCenter
             };
             Controls.Add(_opponentClockLabel);
 
-            // Opponent captured pieces (pieces they captured from me)
+            // Opponent captured pieces
             _opponentCapturedLabel = new Label
             {
                 Text = "",
-                Location = new Point(panelX, 95),
+                Location = new Point(panelX, boardTop + 95),
                 Size = new Size(panelWidth, 30),
                 Font = new Font("Segoe UI Symbol", 16f),
                 ForeColor = Color.LightGray
             };
             Controls.Add(_opponentCapturedLabel);
 
-            // Separator
-            var separator = new Label
-            {
-                Text = "",
-                Location = new Point(panelX, 130),
-                Size = new Size(panelWidth, 2),
-                BackColor = Color.FromArgb(80, 80, 80)
-            };
-            Controls.Add(separator);
-
+            // --- Middle section ---
             // Status label
             _statusLabel = new Label
             {
                 Text = _myColor == PieceColor.White ? "Your turn" : "Opponent's turn",
-                Location = new Point(panelX, 140),
+                Location = new Point(panelX, panelMidY - 60),
                 Size = new Size(panelWidth, 25),
-                Font = new Font("Segoe UI", 10f),
+                Font = new Font("Segoe UI", 11f),
                 ForeColor = Color.FromArgb(180, 200, 180),
                 TextAlign = ContentAlignment.MiddleCenter
             };
@@ -151,57 +156,20 @@ namespace ChessLAN
             var recordLabel = new Label
             {
                 Text = $"Record: {wins}W - {losses}L - {draws}D",
-                Location = new Point(panelX, 168),
-                Size = new Size(panelWidth, 20),
+                Location = new Point(panelX, panelMidY - 30),
+                Size = new Size(panelWidth, 22),
                 Font = new Font("Segoe UI", 9f),
                 ForeColor = Color.FromArgb(150, 150, 150),
                 TextAlign = ContentAlignment.MiddleCenter
             };
             Controls.Add(recordLabel);
 
-            // My captured pieces (pieces I captured from opponent)
-            _myCapturedLabel = new Label
-            {
-                Text = "",
-                Location = new Point(panelX, 388),
-                Size = new Size(panelWidth, 30),
-                Font = new Font("Segoe UI Symbol", 16f),
-                ForeColor = Color.LightGray
-            };
-            Controls.Add(_myCapturedLabel);
-
-            // My clock
-            _myClockLabel = new Label
-            {
-                Text = FormatTime(_myColor == PieceColor.White
-                    ? _clock.WhiteTime : _clock.BlackTime),
-                Location = new Point(panelX, 420),
-                Size = new Size(panelWidth, 50),
-                Font = new Font("Consolas", 26f, FontStyle.Bold),
-                ForeColor = Color.White,
-                BackColor = Color.FromArgb(60, 60, 60),
-                TextAlign = ContentAlignment.MiddleCenter
-            };
-            Controls.Add(_myClockLabel);
-
-            // My name + Elo
-            _myNameLabel = new Label
-            {
-                Text = $"{_playerData.Me.Name} ({_playerData.Me.Elo})",
-                Location = new Point(panelX, 474),
-                Size = new Size(panelWidth, 24),
-                Font = new Font("Segoe UI", 11f, FontStyle.Bold),
-                ForeColor = Color.White,
-                TextAlign = ContentAlignment.MiddleLeft
-            };
-            Controls.Add(_myNameLabel);
-
-            // Buttons panel
+            // Buttons
             _resignButton = new Button
             {
                 Text = "Resign",
-                Location = new Point(panelX, 200),
-                Size = new Size(90, 35),
+                Location = new Point(panelX, panelMidY + 5),
+                Size = new Size(90, 38),
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
                 BackColor = Color.FromArgb(180, 60, 60),
                 ForeColor = Color.White,
@@ -214,8 +182,8 @@ namespace ChessLAN
             _drawButton = new Button
             {
                 Text = "Offer Draw",
-                Location = new Point(panelX + 100, 200),
-                Size = new Size(90, 35),
+                Location = new Point(panelX + 100, panelMidY + 5),
+                Size = new Size(95, 38),
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
                 BackColor = Color.FromArgb(120, 120, 120),
                 ForeColor = Color.White,
@@ -228,8 +196,8 @@ namespace ChessLAN
             _rematchButton = new Button
             {
                 Text = "Rematch",
-                Location = new Point(panelX + 200, 200),
-                Size = new Size(90, 35),
+                Location = new Point(panelX + 205, panelMidY + 5),
+                Size = new Size(95, 38),
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
                 BackColor = Color.FromArgb(52, 120, 200),
                 ForeColor = Color.White,
@@ -239,6 +207,63 @@ namespace ChessLAN
             _rematchButton.FlatAppearance.BorderSize = 0;
             _rematchButton.Click += OnRematchClick;
             Controls.Add(_rematchButton);
+
+            // Show legal moves toggle
+            _showMovesCheckBox = new CheckBox
+            {
+                Text = "Show Legal Moves",
+                Checked = _settings.ShowLegalMoves,
+                Location = new Point(panelX, panelMidY + 55),
+                Size = new Size(panelWidth, 24),
+                Font = new Font("Segoe UI", 9f),
+                ForeColor = Color.LightGray
+            };
+            _showMovesCheckBox.CheckedChanged += (s, ev) =>
+            {
+                _settings.ShowLegalMoves = _showMovesCheckBox.Checked;
+                _settings.Save();
+                _boardControl.ShowLegalMoves = _showMovesCheckBox.Checked;
+                _boardControl.Invalidate();
+            };
+            Controls.Add(_showMovesCheckBox);
+
+            // --- Bottom section ---
+            // My captured pieces
+            _myCapturedLabel = new Label
+            {
+                Text = "",
+                Location = new Point(panelX, boardBottom - 130),
+                Size = new Size(panelWidth, 30),
+                Font = new Font("Segoe UI Symbol", 16f),
+                ForeColor = Color.LightGray
+            };
+            Controls.Add(_myCapturedLabel);
+
+            // My clock
+            _myClockLabel = new Label
+            {
+                Text = FormatTime(_myColor == PieceColor.White
+                    ? _clock.WhiteTime : _clock.BlackTime),
+                Location = new Point(panelX, boardBottom - 90),
+                Size = new Size(panelWidth, 55),
+                Font = new Font("Consolas", 28f, FontStyle.Bold),
+                ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+            Controls.Add(_myClockLabel);
+
+            // My name + Elo
+            _myNameLabel = new Label
+            {
+                Text = $"{_playerData.Me.Name} ({_playerData.Me.Elo})",
+                Location = new Point(panelX, boardBottom - 30),
+                Size = new Size(panelWidth, 28),
+                Font = new Font("Segoe UI", 12f, FontStyle.Bold),
+                ForeColor = Color.White,
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+            Controls.Add(_myNameLabel);
         }
 
         private void WireEvents()
