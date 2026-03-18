@@ -107,21 +107,21 @@ namespace ChessLAN
 
             // === Host Tab ===
             var hostTab = new TabPage("Host Game");
-            hostTab.Padding = new Padding(20);
+            hostTab.Padding = new Padding(30, 20, 30, 20);
 
             _hostEloLabel = new Label
             {
                 Text = $"Your Elo: {_playerData.Me.Elo}",
-                Location = new Point(20, 20),
+                Location = new Point(30, 25),
                 AutoSize = true,
-                Font = new Font("Segoe UI", 11f, FontStyle.Bold)
+                Font = new Font("Segoe UI", 12f, FontStyle.Bold)
             };
             hostTab.Controls.Add(_hostEloLabel);
 
             var tcLabel = new Label
             {
                 Text = "Time Control:",
-                Location = new Point(20, 60),
+                Location = new Point(30, 75),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 10f)
             };
@@ -129,7 +129,7 @@ namespace ChessLAN
 
             _timeControlCombo = new ComboBox
             {
-                Location = new Point(140, 57),
+                Location = new Point(160, 72),
                 Width = 200,
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = new Font("Segoe UI", 10f)
@@ -145,7 +145,7 @@ namespace ChessLAN
             _hostButton = new Button
             {
                 Text = "Host Game",
-                Location = new Point(20, 110),
+                Location = new Point(30, 130),
                 Size = new Size(150, 40),
                 Font = new Font("Segoe UI", 11f, FontStyle.Bold),
                 BackColor = Color.FromArgb(76, 153, 76),
@@ -159,8 +159,8 @@ namespace ChessLAN
             _hostStatusLabel = new Label
             {
                 Text = "",
-                Location = new Point(20, 165),
-                AutoSize = true,
+                Location = new Point(30, 185),
+                Size = new Size(400, 25),
                 Font = new Font("Segoe UI", 10f),
                 ForeColor = Color.FromArgb(100, 100, 100)
             };
@@ -170,12 +170,12 @@ namespace ChessLAN
 
             // === Join Tab ===
             var joinTab = new TabPage("Join Game");
-            joinTab.Padding = new Padding(20);
+            joinTab.Padding = new Padding(30, 20, 30, 20);
 
             var hostListLabel = new Label
             {
                 Text = "Available Hosts:",
-                Location = new Point(20, 20),
+                Location = new Point(30, 25),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 10f)
             };
@@ -183,8 +183,8 @@ namespace ChessLAN
 
             _hostListBox = new ListBox
             {
-                Location = new Point(20, 45),
-                Size = new Size(420, 250),
+                Location = new Point(30, 50),
+                Size = new Size(400, 230),
                 Font = new Font("Segoe UI", 10f)
             };
             joinTab.Controls.Add(_hostListBox);
@@ -192,7 +192,7 @@ namespace ChessLAN
             _refreshButton = new Button
             {
                 Text = "Refresh",
-                Location = new Point(20, 310),
+                Location = new Point(30, 295),
                 Size = new Size(100, 35),
                 Font = new Font("Segoe UI", 10f)
             };
@@ -202,7 +202,7 @@ namespace ChessLAN
             _joinButton = new Button
             {
                 Text = "Join",
-                Location = new Point(130, 310),
+                Location = new Point(145, 295),
                 Size = new Size(100, 35),
                 Font = new Font("Segoe UI", 10f, FontStyle.Bold),
                 BackColor = Color.FromArgb(52, 120, 200),
@@ -217,8 +217,8 @@ namespace ChessLAN
             _joinStatusLabel = new Label
             {
                 Text = "",
-                Location = new Point(20, 355),
-                AutoSize = true,
+                Location = new Point(30, 345),
+                Size = new Size(400, 25),
                 Font = new Font("Segoe UI", 10f),
                 ForeColor = Color.FromArgb(100, 100, 100)
             };
@@ -237,7 +237,7 @@ namespace ChessLAN
             _cleanupTimer.Tick += (s, e) => CleanupStaleHosts();
             _cleanupTimer.Start();
 
-            // Start discovery immediately on join tab
+            // Start discovery when join tab is selected, and also on load
             _tabControl.SelectedIndexChanged += (s, e) =>
             {
                 if (_tabControl.SelectedIndex == 1 && !_isHosting)
@@ -245,6 +245,9 @@ namespace ChessLAN
                     StartDiscovery();
                 }
             };
+
+            // Auto-start discovery on load so hosts are found immediately
+            Load += (s, e) => StartDiscovery();
         }
 
         private void WireEvents()
