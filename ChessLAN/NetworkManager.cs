@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -22,17 +21,13 @@ namespace ChessLAN
         DrawResponse,
         ClockSync,
         SyncData,
-        Rematch,
-        Ack,
-        Ping
+        Rematch
     }
 
     public class NetMessage
     {
         public MessageType Type { get; set; }
         public string? Data { get; set; }
-        public int Seq { get; set; }      // Sequence number for reliability
-        public int AckSeq { get; set; }   // Acknowledging this seq
     }
 
     public class HostInfo
@@ -77,21 +72,16 @@ namespace ChessLAN
 
     public class NetworkManager : IDisposable
     {
-        public const int Port = 41234;
-        public const int BroadcastPort = 41235;
+        public const int UdpPort = 41234;
+        public const int DefaultTcpPort = 41235;
 
-        private UdpClient? _udp;
-        private UdpClient? _broadcastSender;
-        private UdpClient? _broadcastListener;
-        private IPEndPoint? _remoteEndpoint;
+        private UdpClient? _udpBroadcaster;
+        private TcpListener? _tcpListener;
+        private TcpClient? _tcpClient;
+        private StreamReader? _reader;
+        private StreamWriter? _writer;
         private CancellationTokenSource _cts = new();
         private bool _disposed;
-        private bool _connected;
-
-        // Reliability layer
-        private int _nextSeq = 1;
-        private readonly ConcurrentDictionary<int, (byte[] Data, DateTime Sent, int Retries)> _unacked = new();
-        private System.Threading.Timer? _retryTimer;
 
         private static readonly JsonSerializerOptions _jsonOptions = new()
         {
@@ -99,7 +89,7 @@ namespace ChessLAN
         };
 
         // Events
-        public event Action<HostInfo, string>? HostDiscovered; // (hostInfo, senderIp)
+        public event Action<HostInfo, string>? HostDiscovered;
         public event Action<PlayerInfo>? PlayerConnected;
         public event Action<GameStartInfo>? GameStarted;
         public event Action<MoveMessage>? MoveReceived;
@@ -111,29 +101,24 @@ namespace ChessLAN
         public event Action? RematchRequested;
         public event Action<string>? SyncDataReceived;
 
-        // --- Host: wait for joiner to punch through ---
+        // --- Host Methods ---
 
         public void StartHosting(HostInfo hostInfo)
         {
             _cts = new CancellationTokenSource();
-            _udp = new UdpClient();
-            _udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            _udp.Client.Bind(new IPEndPoint(IPAddress.Any, Port));
 
-            // Send a dummy outbound packet to open the firewall
-            byte[] punch = Encoding.UTF8.GetBytes("punch");
-            _udp.Send(punch, punch.Length, new IPEndPoint(IPAddress.Loopback, Port + 1));
+            // Start TCP listener
+            _tcpListener = new TcpListener(IPAddress.Any, hostInfo.Port);
+            _tcpListener.Start();
 
-            StartRetryTimer();
-            StartReceiveLoop();
+            // Start UDP broadcast
+            _udpBroadcaster = new UdpClient();
+            _udpBroadcaster.EnableBroadcast = true;
 
-            // Broadcast host announcement every second
-            _broadcastSender = new UdpClient();
-            _broadcastSender.EnableBroadcast = true;
             var token = _cts.Token;
             Task.Run(async () =>
             {
-                var endpoint = new IPEndPoint(IPAddress.Broadcast, BroadcastPort);
+                var endpoint = new IPEndPoint(IPAddress.Broadcast, UdpPort);
                 while (!token.IsCancellationRequested)
                 {
                     try
@@ -145,7 +130,7 @@ namespace ChessLAN
                         };
                         string json = JsonSerializer.Serialize(msg, _jsonOptions);
                         byte[] bytes = Encoding.UTF8.GetBytes(json);
-                        _broadcastSender.Send(bytes, bytes.Length, endpoint);
+                        await _udpBroadcaster.SendAsync(bytes, bytes.Length, endpoint);
                         await Task.Delay(1000, token);
                     }
                     catch (OperationCanceledException) { break; }
@@ -156,36 +141,61 @@ namespace ChessLAN
 
         public void StopHosting()
         {
-            _cts.Cancel();
-            _retryTimer?.Dispose();
-            _broadcastSender?.Close();
-            _broadcastSender?.Dispose();
-            _broadcastSender = null;
-            _udp?.Close();
-            _udp?.Dispose();
-            _udp = null;
+            _udpBroadcaster?.Close();
+            _udpBroadcaster?.Dispose();
+            _udpBroadcaster = null;
+            _tcpListener?.Stop();
+            _tcpListener = null;
         }
 
         public void AcceptConnection()
         {
-            // Host just waits for Connect message in receive loop
+            if (_tcpListener == null) return;
+            var token = _cts.Token;
+            Task.Run(async () =>
+            {
+                try
+                {
+                    _tcpClient = await _tcpListener.AcceptTcpClientAsync(token);
+                    _tcpClient.NoDelay = true;
+                    var stream = _tcpClient.GetStream();
+                    _reader = new StreamReader(stream, Encoding.UTF8);
+                    _writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
+
+                    string? line = await _reader.ReadLineAsync();
+                    if (line != null)
+                    {
+                        var msg = JsonSerializer.Deserialize<NetMessage>(line, _jsonOptions);
+                        if (msg?.Type == MessageType.Connect && msg.Data != null)
+                        {
+                            var playerInfo = JsonSerializer.Deserialize<PlayerInfo>(msg.Data, _jsonOptions);
+                            if (playerInfo != null)
+                                PlayerConnected?.Invoke(playerInfo);
+                        }
+                    }
+
+                    StartReadLoop(token);
+                }
+                catch (OperationCanceledException) { }
+                catch { Disconnected?.Invoke(); }
+            }, token);
         }
 
-        // --- Discovery: listen for host broadcasts ---
+        public void SendGameStart(GameStartInfo info) => SendMessage(MessageType.GameStart, info);
+
+        // --- Discovery (joiner listens for UDP broadcasts) ---
+
+        private UdpClient? _udpListener;
 
         public void StartDiscovery()
         {
-            _broadcastListener?.Close();
-            _broadcastListener?.Dispose();
+            _udpListener?.Close();
+            _udpListener?.Dispose();
 
-            _broadcastListener = new UdpClient();
-            _broadcastListener.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            _broadcastListener.Client.Bind(new IPEndPoint(IPAddress.Any, BroadcastPort));
-            _broadcastListener.EnableBroadcast = true;
-
-            // Send outbound to open firewall for this socket
-            byte[] punch = Encoding.UTF8.GetBytes("punch");
-            _broadcastListener.Send(punch, punch.Length, new IPEndPoint(IPAddress.Loopback, BroadcastPort + 1));
+            _udpListener = new UdpClient();
+            _udpListener.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            _udpListener.Client.Bind(new IPEndPoint(IPAddress.Any, UdpPort));
+            _udpListener.EnableBroadcast = true;
 
             var token = _cts.Token;
             Task.Run(async () =>
@@ -194,10 +204,8 @@ namespace ChessLAN
                 {
                     try
                     {
-                        var result = await _broadcastListener.ReceiveAsync(token);
+                        var result = await _udpListener.ReceiveAsync(token);
                         string json = Encoding.UTF8.GetString(result.Buffer);
-                        if (json == "punch") continue;
-
                         var msg = JsonSerializer.Deserialize<NetMessage>(json, _jsonOptions);
                         if (msg?.Type == MessageType.HostAnnounce && msg.Data != null)
                         {
@@ -218,219 +226,83 @@ namespace ChessLAN
 
         public void StopDiscovery()
         {
-            _broadcastListener?.Close();
-            _broadcastListener?.Dispose();
-            _broadcastListener = null;
+            _udpListener?.Close();
+            _udpListener?.Dispose();
+            _udpListener = null;
         }
 
-        public void SendGameStart(GameStartInfo info)
+        // --- Client Methods ---
+
+        public async Task ConnectToHost(string hostIp, PlayerInfo myInfo)
         {
-            SendReliable(MessageType.GameStart, info);
+            _tcpClient = new TcpClient();
+            _tcpClient.NoDelay = true;
+            await _tcpClient.ConnectAsync(IPAddress.Parse(hostIp), DefaultTcpPort);
+
+            var stream = _tcpClient.GetStream();
+            _reader = new StreamReader(stream, Encoding.UTF8);
+            _writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
+
+            SendMessage(MessageType.Connect, myInfo);
+            StartReadLoop(_cts.Token);
         }
 
-        // --- Client: punch through to host ---
+        // --- Shared Methods ---
 
-        public async Task ConnectToHost(string hostIpOrName, PlayerInfo myInfo)
-        {
-            _cts = new CancellationTokenSource();
-
-            // Try parsing as IP first, then resolve as hostname
-            IPAddress hostIp;
-            if (!IPAddress.TryParse(hostIpOrName, out hostIp!))
-            {
-                try
-                {
-                    var addresses = await Dns.GetHostAddressesAsync(hostIpOrName);
-                    hostIp = Array.Find(addresses, a => a.AddressFamily == AddressFamily.InterNetwork)
-                             ?? throw new Exception($"No IPv4 address for '{hostIpOrName}'");
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    throw new Exception($"Could not resolve '{hostIpOrName}'");
-                }
-            }
-
-            _remoteEndpoint = new IPEndPoint(hostIp, Port);
-
-            _udp = new UdpClient();
-            _udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            _udp.Client.Bind(new IPEndPoint(IPAddress.Any, 0)); // Random local port
-
-            // Send outbound to open firewall
-            byte[] punch = Encoding.UTF8.GetBytes("punch");
-            _udp.Send(punch, punch.Length, new IPEndPoint(IPAddress.Loopback, Port + 1));
-
-            StartRetryTimer();
-            StartReceiveLoop();
-
-            // Send Connect message (reliable, will retry until ACKed)
-            SendReliable(MessageType.Connect, myInfo);
-
-            // Wait for connection to be acknowledged (up to 5 seconds)
-            var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (!_connected && DateTime.UtcNow < deadline)
-            {
-                await Task.Delay(100, _cts.Token);
-            }
-
-            if (!_connected)
-                throw new TimeoutException("Connection timed out. Check the PC name and make sure the host is waiting.");
-        }
-
-        // --- Shared send methods ---
-
-        public void SendMove(MoveMessage move) => SendReliable(MessageType.MoveMsg, move);
-        public void SendResign() => SendReliable(MessageType.Resign, (object?)null);
-        public void SendDrawOffer() => SendReliable(MessageType.DrawOffer, (object?)null);
+        public void SendMove(MoveMessage move) => SendMessage(MessageType.MoveMsg, move);
+        public void SendResign() => SendMessage(MessageType.Resign, (object?)null);
+        public void SendDrawOffer() => SendMessage(MessageType.DrawOffer, (object?)null);
         public void SendDrawResponse(bool accepted) =>
-            SendReliable(MessageType.DrawResponse, new DrawResponseMessage { Accepted = accepted });
+            SendMessage(MessageType.DrawResponse, new DrawResponseMessage { Accepted = accepted });
         public void SendClockSync(double whiteMs, double blackMs) =>
-            SendFire(MessageType.ClockSync, new ClockSyncMessage { WhiteTimeMs = whiteMs, BlackTimeMs = blackMs });
-        public void SendSyncData(string jsonData) => SendReliable(MessageType.SyncData, jsonData);
-        public void SendRematch() => SendReliable(MessageType.Rematch, (object?)null);
+            SendMessage(MessageType.ClockSync, new ClockSyncMessage { WhiteTimeMs = whiteMs, BlackTimeMs = blackMs });
+        public void SendSyncData(string jsonData) => SendMessage(MessageType.SyncData, jsonData);
+        public void SendRematch() => SendMessage(MessageType.Rematch, (object?)null);
 
-        // --- Reliability layer ---
+        // --- Private Helpers ---
 
-        private void SendReliable<T>(MessageType type, T payload)
+        private void SendMessage<T>(MessageType type, T payload)
         {
-            if (_udp == null || _remoteEndpoint == null) return;
-
-            int seq = Interlocked.Increment(ref _nextSeq);
-
-            string? data = payload != null
-                ? (payload is string s ? s : JsonSerializer.Serialize(payload, _jsonOptions))
-                : null;
-
-            var msg = new NetMessage { Type = type, Data = data, Seq = seq };
-            string json = JsonSerializer.Serialize(msg, _jsonOptions);
-            byte[] bytes = Encoding.UTF8.GetBytes(json);
-
-            _unacked[seq] = (bytes, DateTime.UtcNow, 0);
-
-            try { _udp.Send(bytes, bytes.Length, _remoteEndpoint); }
-            catch { }
-        }
-
-        // Fire-and-forget (for clock sync — high frequency, loss is OK)
-        private void SendFire<T>(MessageType type, T payload)
-        {
-            if (_udp == null || _remoteEndpoint == null) return;
-
-            string? data = payload != null
-                ? (payload is string s ? s : JsonSerializer.Serialize(payload, _jsonOptions))
-                : null;
-
-            var msg = new NetMessage { Type = type, Data = data, Seq = 0 };
-            string json = JsonSerializer.Serialize(msg, _jsonOptions);
-            byte[] bytes = Encoding.UTF8.GetBytes(json);
-
-            try { _udp.Send(bytes, bytes.Length, _remoteEndpoint); }
-            catch { }
-        }
-
-        private void SendAck(int ackSeq)
-        {
-            if (_udp == null || _remoteEndpoint == null) return;
-
-            var msg = new NetMessage { Type = MessageType.Ack, AckSeq = ackSeq };
-            string json = JsonSerializer.Serialize(msg, _jsonOptions);
-            byte[] bytes = Encoding.UTF8.GetBytes(json);
-
-            try { _udp.Send(bytes, bytes.Length, _remoteEndpoint); }
-            catch { }
-        }
-
-        private void StartRetryTimer()
-        {
-            _retryTimer = new System.Threading.Timer(_ =>
+            if (_writer == null) return;
+            try
             {
-                if (_disposed) return;
-                var now = DateTime.UtcNow;
-                foreach (var kvp in _unacked)
-                {
-                    var (data, sent, retries) = kvp.Value;
-                    if ((now - sent).TotalMilliseconds > 200) // Retry after 200ms
-                    {
-                        if (retries > 50) // ~10 seconds of retries
-                        {
-                            _unacked.TryRemove(kvp.Key, out var _removed);
-                            Disconnected?.Invoke();
-                            return;
-                        }
-
-                        _unacked[kvp.Key] = (data, now, retries + 1);
-                        try { _udp?.Send(data, data.Length, _remoteEndpoint); }
-                        catch { }
-                    }
-                }
-            }, null, 100, 100);
+                string? data = payload != null
+                    ? (payload is string s ? s : JsonSerializer.Serialize(payload, _jsonOptions))
+                    : null;
+                var msg = new NetMessage { Type = type, Data = data };
+                string json = JsonSerializer.Serialize(msg, _jsonOptions);
+                _writer.WriteLine(json);
+                _writer.Flush();
+            }
+            catch { Disconnected?.Invoke(); }
         }
 
-        // --- Receive loop ---
-
-        private void StartReceiveLoop()
+        private void StartReadLoop(CancellationToken token)
         {
-            var token = _cts.Token;
             Task.Run(async () =>
             {
                 try
                 {
-                    while (!token.IsCancellationRequested && _udp != null)
+                    while (!token.IsCancellationRequested && _reader != null)
                     {
-                        UdpReceiveResult result;
-                        try { result = await _udp.ReceiveAsync(token); }
-                        catch (OperationCanceledException) { break; }
-                        catch (ObjectDisposedException) { break; }
-                        catch { continue; }
-
-                        string json = Encoding.UTF8.GetString(result.Buffer);
-
-                        // Ignore punch packets
-                        if (json == "punch") continue;
+                        string? line = await _reader.ReadLineAsync();
+                        if (line == null) { Disconnected?.Invoke(); break; }
 
                         NetMessage? msg;
-                        try { msg = JsonSerializer.Deserialize<NetMessage>(json, _jsonOptions); }
+                        try { msg = JsonSerializer.Deserialize<NetMessage>(line, _jsonOptions); }
                         catch { continue; }
                         if (msg == null) continue;
 
-                        // Handle ACK
-                        if (msg.Type == MessageType.Ack)
-                        {
-                            _unacked.TryRemove(msg.AckSeq, out _);
-                            continue;
-                        }
-
-                        // Set remote endpoint from first real message (for host)
-                        if (_remoteEndpoint == null)
-                        {
-                            _remoteEndpoint = result.RemoteEndPoint;
-                        }
-
-                        // Send ACK for reliable messages
-                        if (msg.Seq > 0)
-                        {
-                            SendAck(msg.Seq);
-                        }
-
-                        // Dispatch
                         switch (msg.Type)
                         {
                             case MessageType.Connect:
                                 if (msg.Data != null)
                                 {
                                     var pi = JsonSerializer.Deserialize<PlayerInfo>(msg.Data, _jsonOptions);
-                                    if (pi != null)
-                                    {
-                                        _connected = true;
-                                        PlayerConnected?.Invoke(pi);
-                                    }
+                                    if (pi != null) PlayerConnected?.Invoke(pi);
                                 }
                                 break;
-                            case MessageType.ConnectAck:
-                                _connected = true;
-                                break;
                             case MessageType.GameStart:
-                                _connected = true;
                                 if (msg.Data != null)
                                 {
                                     var gsi = JsonSerializer.Deserialize<GameStartInfo>(msg.Data, _jsonOptions);
@@ -470,12 +342,11 @@ namespace ChessLAN
                             case MessageType.Rematch:
                                 RematchRequested?.Invoke();
                                 break;
-                            case MessageType.Ping:
-                                break;
                         }
                     }
                 }
-                catch (ObjectDisposedException) { }
+                catch (ObjectDisposedException) { Disconnected?.Invoke(); }
+                catch (IOException) { Disconnected?.Invoke(); }
                 catch { Disconnected?.Invoke(); }
             }, token);
         }
@@ -486,13 +357,15 @@ namespace ChessLAN
             _disposed = true;
 
             _cts.Cancel();
-            _retryTimer?.Dispose();
-            _broadcastSender?.Close();
-            _broadcastSender?.Dispose();
-            _broadcastListener?.Close();
-            _broadcastListener?.Dispose();
-            _udp?.Close();
-            _udp?.Dispose();
+            _udpBroadcaster?.Close();
+            _udpBroadcaster?.Dispose();
+            _udpListener?.Close();
+            _udpListener?.Dispose();
+            _writer?.Dispose();
+            _reader?.Dispose();
+            _tcpClient?.Close();
+            _tcpClient?.Dispose();
+            _tcpListener?.Stop();
             _cts.Dispose();
         }
     }

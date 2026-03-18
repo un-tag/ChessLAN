@@ -357,7 +357,7 @@ namespace ChessLAN
                 Name = _playerData.Me.Name,
                 Elo = _playerData.Me.Elo,
                 TimeControl = timeControl,
-                Port = NetworkManager.Port
+                Port = NetworkManager.DefaultTcpPort
             };
 
             _network.StopDiscovery();
@@ -498,7 +498,7 @@ namespace ChessLAN
                     Name = _playerData.Me.Name,
                     Elo = _playerData.Me.Elo,
                     TimeControl = timeControl,
-                    Port = NetworkManager.Port
+                    Port = NetworkManager.DefaultTcpPort
                 });
                 _network.AcceptConnection();
             }
