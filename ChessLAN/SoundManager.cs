@@ -6,68 +6,124 @@ namespace ChessLAN
 {
     public static class SoundManager
     {
+        public static bool Muted { get; set; }
+
+        // Chess.com-style sounds: short, crisp, satisfying
+
         public static void PlayMove()
         {
-            PlayTone(400, 50, 0.3);
+            if (Muted) return;
+            // Soft wooden "tap" — short noise burst with fast decay
+            PlayNoise(frequency: 800, durationMs: 40, volume: 0.25, decayRate: 30.0);
         }
 
         public static void PlayCapture()
         {
-            PlayTone(300, 80, 0.4);
+            if (Muted) return;
+            // Punchy "thwack" — lower frequency, slightly longer, louder
+            PlayNoise(frequency: 400, durationMs: 70, volume: 0.4, decayRate: 20.0);
         }
 
         public static void PlayCheck()
         {
-            PlayTone(600, 100, 0.35);
+            if (Muted) return;
+            // Sharp alert ping
+            PlayCompound(new[]
+            {
+                (freq: 880, durationMs: 60, vol: 0.3, decay: 25.0),
+                (freq: 1200, durationMs: 40, vol: 0.2, decay: 35.0),
+            });
         }
 
         public static void PlayGameStart()
         {
-            PlayTone(500, 150, 0.3);
+            if (Muted) return;
+            // Two ascending tones
+            PlayCompound(new[]
+            {
+                (freq: 440, durationMs: 80, vol: 0.2, decay: 15.0),
+                (freq: 660, durationMs: 100, vol: 0.25, decay: 15.0),
+            });
         }
 
         public static void PlayGameEnd()
         {
-            // Two tones concatenated
-            byte[] tone1 = GenerateToneSamples(350, 100, 0.3);
-            byte[] tone2 = GenerateToneSamples(250, 100, 0.3);
-            byte[] allSamples = new byte[tone1.Length + tone2.Length];
-            Buffer.BlockCopy(tone1, 0, allSamples, 0, tone1.Length);
-            Buffer.BlockCopy(tone2, 0, allSamples, tone1.Length, tone2.Length);
-            byte[] wav = BuildWav(allSamples);
-            PlayWav(wav);
+            if (Muted) return;
+            // Two descending tones
+            PlayCompound(new[]
+            {
+                (freq: 500, durationMs: 100, vol: 0.25, decay: 12.0),
+                (freq: 330, durationMs: 150, vol: 0.2, decay: 10.0),
+            });
         }
 
-        private static byte[] GenerateTone(int frequencyHz, int durationMs, double volume = 0.3)
-        {
-            byte[] samples = GenerateToneSamples(frequencyHz, durationMs, volume);
-            return BuildWav(samples);
-        }
-
-        private static byte[] GenerateToneSamples(int frequencyHz, int durationMs, double volume)
+        private static void PlayNoise(int frequency, int durationMs, double volume, double decayRate)
         {
             int sampleRate = 44100;
-            int numSamples = (int)(sampleRate * durationMs / 1000.0);
-            byte[] data = new byte[numSamples * 2]; // 16-bit mono
+            int numSamples = sampleRate * durationMs / 1000;
+            byte[] data = new byte[numSamples * 2];
+            var rng = new Random(42); // deterministic seed for consistent sound
 
             for (int i = 0; i < numSamples; i++)
             {
                 double t = (double)i / sampleRate;
-                double sample = Math.Sin(2.0 * Math.PI * frequencyHz * t) * volume;
+                double progress = (double)i / numSamples;
 
-                // Apply a short fade-in and fade-out to avoid clicks
-                int fadeLength = Math.Min(numSamples / 10, 200);
-                if (i < fadeLength)
-                    sample *= (double)i / fadeLength;
-                else if (i > numSamples - fadeLength)
-                    sample *= (double)(numSamples - i) / fadeLength;
+                // Exponential decay envelope
+                double envelope = Math.Exp(-decayRate * progress);
 
-                short pcmValue = (short)(sample * short.MaxValue);
-                data[i * 2] = (byte)(pcmValue & 0xFF);
-                data[i * 2 + 1] = (byte)((pcmValue >> 8) & 0xFF);
+                // Mix sine tone with filtered noise for a natural "tap" sound
+                double sine = Math.Sin(2.0 * Math.PI * frequency * t);
+                double noise = (rng.NextDouble() * 2.0 - 1.0) * 0.4;
+
+                // Blend: more tone at start, noise adds texture
+                double sample = (sine * 0.7 + noise * 0.3) * envelope * volume;
+
+                // Soft clip
+                sample = Math.Clamp(sample, -0.95, 0.95);
+
+                short pcm = (short)(sample * short.MaxValue);
+                data[i * 2] = (byte)(pcm & 0xFF);
+                data[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
             }
 
-            return data;
+            PlayWav(BuildWav(data));
+        }
+
+        private static void PlayCompound((int freq, int durationMs, double vol, double decay)[] parts)
+        {
+            int sampleRate = 44100;
+            int totalSamples = 0;
+            foreach (var p in parts)
+                totalSamples += sampleRate * p.durationMs / 1000;
+
+            byte[] data = new byte[totalSamples * 2];
+            int offset = 0;
+            var rng = new Random(42);
+
+            foreach (var part in parts)
+            {
+                int numSamples = sampleRate * part.durationMs / 1000;
+                for (int i = 0; i < numSamples; i++)
+                {
+                    double t = (double)i / sampleRate;
+                    double progress = (double)i / numSamples;
+
+                    double envelope = Math.Exp(-part.decay * progress);
+                    double sine = Math.Sin(2.0 * Math.PI * part.freq * t);
+                    double noise = (rng.NextDouble() * 2.0 - 1.0) * 0.15;
+                    double sample = (sine * 0.85 + noise * 0.15) * envelope * part.vol;
+                    sample = Math.Clamp(sample, -0.95, 0.95);
+
+                    short pcm = (short)(sample * short.MaxValue);
+                    int idx = (offset + i) * 2;
+                    data[idx] = (byte)(pcm & 0xFF);
+                    data[idx + 1] = (byte)((pcm >> 8) & 0xFF);
+                }
+                offset += numSamples;
+            }
+
+            PlayWav(BuildWav(data));
         }
 
         private static byte[] BuildWav(byte[] pcmData)
@@ -83,34 +139,25 @@ namespace ChessLAN
             using var ms = new MemoryStream();
             using var bw = new BinaryWriter(ms);
 
-            // RIFF header
             bw.Write(new char[] { 'R', 'I', 'F', 'F' });
             bw.Write(chunkSize);
             bw.Write(new char[] { 'W', 'A', 'V', 'E' });
 
-            // fmt sub-chunk
             bw.Write(new char[] { 'f', 'm', 't', ' ' });
-            bw.Write(16); // sub-chunk size
-            bw.Write((short)1); // PCM format
+            bw.Write(16);
+            bw.Write((short)1);
             bw.Write(channels);
             bw.Write(sampleRate);
             bw.Write(byteRate);
             bw.Write(blockAlign);
             bw.Write(bitsPerSample);
 
-            // data sub-chunk
             bw.Write(new char[] { 'd', 'a', 't', 'a' });
             bw.Write(dataSize);
             bw.Write(pcmData);
 
             bw.Flush();
             return ms.ToArray();
-        }
-
-        private static void PlayTone(int frequencyHz, int durationMs, double volume = 0.3)
-        {
-            byte[] wav = GenerateTone(frequencyHz, durationMs, volume);
-            PlayWav(wav);
         }
 
         private static void PlayWav(byte[] wavData)
@@ -121,10 +168,7 @@ namespace ChessLAN
                 var player = new SoundPlayer(ms);
                 player.Play();
             }
-            catch
-            {
-                // Silently fail if audio unavailable
-            }
+            catch { }
         }
     }
 }

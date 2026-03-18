@@ -37,6 +37,7 @@ namespace ChessLAN
         private bool _opponentRematchRequested;
         private AppSettings _settings;
         private CheckBox _showMovesCheckBox = null!;
+        private CheckBox _muteCheckBox = null!;
         private Label _recordLabel = null!;
 
         public GameForm(NetworkManager network, PlayerDataStore playerData,
@@ -224,6 +225,27 @@ namespace ChessLAN
             };
             Controls.Add(_showMovesCheckBox);
 
+            // Mute toggle
+            _muteCheckBox = new CheckBox
+            {
+                Text = "Mute Sound",
+                Checked = _settings.Muted,
+                Location = new Point(0, 0), // set by LayoutControls
+                Size = new Size(panelWidth, 24),
+                Font = new Font("Segoe UI", 9f),
+                ForeColor = Color.LightGray
+            };
+            _muteCheckBox.CheckedChanged += (s, ev) =>
+            {
+                _settings.Muted = _muteCheckBox.Checked;
+                _settings.Save();
+                SoundManager.Muted = _muteCheckBox.Checked;
+            };
+            Controls.Add(_muteCheckBox);
+
+            // Initialize mute state
+            SoundManager.Muted = _settings.Muted;
+
             // --- Bottom section ---
             // My captured pieces
             _myCapturedLabel = new Label
@@ -306,6 +328,9 @@ namespace ChessLAN
 
             _showMovesCheckBox.Location = new Point(px, mid + 55);
             _showMovesCheckBox.Size = new Size(pw, 24);
+
+            _muteCheckBox.Location = new Point(px, mid + 80);
+            _muteCheckBox.Size = new Size(pw, 24);
 
             _myCapturedLabel.Location = new Point(px, bb - 130);
             _myCapturedLabel.Size = new Size(pw, 30);
