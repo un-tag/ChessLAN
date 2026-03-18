@@ -21,7 +21,7 @@ namespace ChessLAN
         private bool _isHosting;
 
         // Join tab
-        private TextBox _hostPcNameTextBox;
+        private ComboBox _hostPcNameCombo;
         private Button _joinButton;
         private Label _joinStatusLabel;
         private Label _joinEloLabel;
@@ -44,8 +44,6 @@ namespace ChessLAN
             else
                 _nameTextBox.Text = _playerData.Me.Name;
 
-            if (!string.IsNullOrEmpty(_settings.LastHostName))
-                _hostPcNameTextBox.Text = _settings.LastHostName;
         }
 
         private void InitializeUI()
@@ -196,14 +194,19 @@ namespace ChessLAN
             };
             joinTab.Controls.Add(hostNameLabel);
 
-            _hostPcNameTextBox = new TextBox
+            _hostPcNameCombo = new ComboBox
             {
                 Location = new Point(170, 67),
                 Width = 230,
                 Font = new Font("Segoe UI", 10f),
+                DropDownStyle = ComboBoxStyle.DropDown,
                 MaxLength = 50
             };
-            joinTab.Controls.Add(_hostPcNameTextBox);
+            foreach (var h in _settings.HostHistory)
+                _hostPcNameCombo.Items.Add(h);
+            if (_hostPcNameCombo.Items.Count > 0)
+                _hostPcNameCombo.SelectedIndex = 0;
+            joinTab.Controls.Add(_hostPcNameCombo);
 
             _joinButton = new Button
             {
@@ -287,12 +290,12 @@ namespace ChessLAN
                 return;
             }
 
-            string hostPcName = _hostPcNameTextBox.Text.Trim();
+            string hostPcName = _hostPcNameCombo.Text.Trim();
             if (string.IsNullOrEmpty(hostPcName))
             {
                 MessageBox.Show("Enter the host's PC name.", "PC Name Required",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                _hostPcNameTextBox.Focus();
+                _hostPcNameCombo.Focus();
                 return;
             }
 
@@ -315,7 +318,7 @@ namespace ChessLAN
                 await _network.ConnectToHost(hostPcName, myInfo);
                 _joinStatusLabel.Text = "Connected! Waiting for game start...";
 
-                _settings.LastHostName = hostPcName;
+                _settings.AddHost(hostPcName);
                 _settings.Save();
                 _network.SendSyncData(_playerData.SerializeForSync());
             }
