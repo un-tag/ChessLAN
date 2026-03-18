@@ -7,6 +7,7 @@ namespace ChessLAN
     {
         public bool ShowLegalMoves { get; set; } = true;
         public bool Muted { get; set; } = false;
+        public string LastHostName { get; set; } = "";
 
         private static readonly string FilePath = Path.Combine(AppContext.BaseDirectory, "chess_settings.json");
         private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };

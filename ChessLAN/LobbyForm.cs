@@ -27,12 +27,14 @@ namespace ChessLAN
         private Label _joinEloLabel;
 
         private bool _connecting;
+        private AppSettings _settings;
 
         public LobbyForm()
         {
             _playerData = new PlayerDataStore();
             _playerData.Load();
             _network = new NetworkManager();
+            _settings = AppSettings.Load();
 
             InitializeUI();
             WireEvents();
@@ -41,6 +43,9 @@ namespace ChessLAN
                 _nameTextBox.Focus();
             else
                 _nameTextBox.Text = _playerData.Me.Name;
+
+            if (!string.IsNullOrEmpty(_settings.LastHostName))
+                _hostPcNameTextBox.Text = _settings.LastHostName;
         }
 
         private void InitializeUI()
@@ -309,6 +314,9 @@ namespace ChessLAN
 
                 await _network.ConnectToHost(hostPcName, myInfo);
                 _joinStatusLabel.Text = "Connected! Waiting for game start...";
+
+                _settings.LastHostName = hostPcName;
+                _settings.Save();
                 _network.SendSyncData(_playerData.SerializeForSync());
             }
             catch (TimeoutException)
