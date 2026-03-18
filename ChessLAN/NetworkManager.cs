@@ -78,8 +78,11 @@ namespace ChessLAN
     public class NetworkManager : IDisposable
     {
         public const int Port = 41234;
+        public const int BroadcastPort = 41235;
 
         private UdpClient? _udp;
+        private UdpClient? _broadcastSender;
+        private UdpClient? _broadcastListener;
         private IPEndPoint? _remoteEndpoint;
         private CancellationTokenSource _cts = new();
         private bool _disposed;
@@ -96,6 +99,7 @@ namespace ChessLAN
         };
 
         // Events
+        public event Action<HostInfo, string>? HostDiscovered; // (hostInfo, senderIp)
         public event Action<PlayerInfo>? PlayerConnected;
         public event Action<GameStartInfo>? GameStarted;
         public event Action<MoveMessage>? MoveReceived;
@@ -109,7 +113,7 @@ namespace ChessLAN
 
         // --- Host: wait for joiner to punch through ---
 
-        public void StartHosting()
+        public void StartHosting(HostInfo hostInfo)
         {
             _cts = new CancellationTokenSource();
             _udp = new UdpClient();
@@ -122,12 +126,41 @@ namespace ChessLAN
 
             StartRetryTimer();
             StartReceiveLoop();
+
+            // Broadcast host announcement every second
+            _broadcastSender = new UdpClient();
+            _broadcastSender.EnableBroadcast = true;
+            var token = _cts.Token;
+            Task.Run(async () =>
+            {
+                var endpoint = new IPEndPoint(IPAddress.Broadcast, BroadcastPort);
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var msg = new NetMessage
+                        {
+                            Type = MessageType.HostAnnounce,
+                            Data = JsonSerializer.Serialize(hostInfo, _jsonOptions)
+                        };
+                        string json = JsonSerializer.Serialize(msg, _jsonOptions);
+                        byte[] bytes = Encoding.UTF8.GetBytes(json);
+                        _broadcastSender.Send(bytes, bytes.Length, endpoint);
+                        await Task.Delay(1000, token);
+                    }
+                    catch (OperationCanceledException) { break; }
+                    catch { }
+                }
+            }, token);
         }
 
         public void StopHosting()
         {
             _cts.Cancel();
             _retryTimer?.Dispose();
+            _broadcastSender?.Close();
+            _broadcastSender?.Dispose();
+            _broadcastSender = null;
             _udp?.Close();
             _udp?.Dispose();
             _udp = null;
@@ -138,6 +171,58 @@ namespace ChessLAN
             // Host just waits for Connect message in receive loop
         }
 
+        // --- Discovery: listen for host broadcasts ---
+
+        public void StartDiscovery()
+        {
+            _broadcastListener?.Close();
+            _broadcastListener?.Dispose();
+
+            _broadcastListener = new UdpClient();
+            _broadcastListener.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            _broadcastListener.Client.Bind(new IPEndPoint(IPAddress.Any, BroadcastPort));
+            _broadcastListener.EnableBroadcast = true;
+
+            // Send outbound to open firewall for this socket
+            byte[] punch = Encoding.UTF8.GetBytes("punch");
+            _broadcastListener.Send(punch, punch.Length, new IPEndPoint(IPAddress.Loopback, BroadcastPort + 1));
+
+            var token = _cts.Token;
+            Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var result = await _broadcastListener.ReceiveAsync(token);
+                        string json = Encoding.UTF8.GetString(result.Buffer);
+                        if (json == "punch") continue;
+
+                        var msg = JsonSerializer.Deserialize<NetMessage>(json, _jsonOptions);
+                        if (msg?.Type == MessageType.HostAnnounce && msg.Data != null)
+                        {
+                            var hostInfo = JsonSerializer.Deserialize<HostInfo>(msg.Data, _jsonOptions);
+                            if (hostInfo != null)
+                            {
+                                string senderIp = result.RemoteEndPoint.Address.ToString();
+                                HostDiscovered?.Invoke(hostInfo, senderIp);
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException) { break; }
+                    catch (ObjectDisposedException) { break; }
+                    catch { }
+                }
+            }, token);
+        }
+
+        public void StopDiscovery()
+        {
+            _broadcastListener?.Close();
+            _broadcastListener?.Dispose();
+            _broadcastListener = null;
+        }
+
         public void SendGameStart(GameStartInfo info)
         {
             SendReliable(MessageType.GameStart, info);
@@ -145,23 +230,25 @@ namespace ChessLAN
 
         // --- Client: punch through to host ---
 
-        public async Task ConnectToHost(string hostName, PlayerInfo myInfo)
+        public async Task ConnectToHost(string hostIpOrName, PlayerInfo myInfo)
         {
             _cts = new CancellationTokenSource();
 
-            // Resolve host name to IP
-            IPAddress[] addresses;
-            try
+            // Try parsing as IP first, then resolve as hostname
+            IPAddress hostIp;
+            if (!IPAddress.TryParse(hostIpOrName, out hostIp!))
             {
-                addresses = await Dns.GetHostAddressesAsync(hostName);
+                try
+                {
+                    var addresses = await Dns.GetHostAddressesAsync(hostIpOrName);
+                    hostIp = Array.Find(addresses, a => a.AddressFamily == AddressFamily.InterNetwork)
+                             ?? throw new Exception($"No IPv4 address for '{hostIpOrName}'");
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new Exception($"Could not resolve '{hostIpOrName}'");
+                }
             }
-            catch
-            {
-                throw new Exception($"Could not resolve '{hostName}'");
-            }
-
-            var hostIp = Array.Find(addresses, a => a.AddressFamily == AddressFamily.InterNetwork)
-                         ?? throw new Exception($"No IPv4 address found for '{hostName}'");
 
             _remoteEndpoint = new IPEndPoint(hostIp, Port);
 
@@ -400,6 +487,10 @@ namespace ChessLAN
 
             _cts.Cancel();
             _retryTimer?.Dispose();
+            _broadcastSender?.Close();
+            _broadcastSender?.Dispose();
+            _broadcastListener?.Close();
+            _broadcastListener?.Dispose();
             _udp?.Close();
             _udp?.Dispose();
             _cts.Dispose();

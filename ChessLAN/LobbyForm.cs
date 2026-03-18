@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace ChessLAN
@@ -17,24 +19,23 @@ namespace ChessLAN
         private Button _hostButton;
         private Label _hostStatusLabel;
         private Label _hostEloLabel;
-        private Label _pcNameLabel;
         private bool _isHosting;
 
         // Join tab
-        private ComboBox _hostPcNameCombo;
+        private ListBox _hostListBox;
         private Button _joinButton;
         private Label _joinStatusLabel;
         private Label _joinEloLabel;
 
+        private Dictionary<string, (HostInfo Info, string Ip, DateTime LastSeen)> _discoveredHosts = new();
+        private System.Windows.Forms.Timer _cleanupTimer;
         private bool _connecting;
-        private AppSettings _settings;
 
         public LobbyForm()
         {
             _playerData = new PlayerDataStore();
             _playerData.Load();
             _network = new NetworkManager();
-            _settings = AppSettings.Load();
 
             InitializeUI();
             WireEvents();
@@ -43,13 +44,12 @@ namespace ChessLAN
                 _nameTextBox.Focus();
             else
                 _nameTextBox.Text = _playerData.Me.Name;
-
         }
 
         private void InitializeUI()
         {
             Text = "ChessLAN";
-            Size = new Size(500, 500);
+            Size = new Size(500, 530);
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
@@ -94,7 +94,7 @@ namespace ChessLAN
             _tabControl = new TabControl
             {
                 Location = new Point(10, 115),
-                Size = new Size(464, 335),
+                Size = new Size(464, 365),
                 Font = new Font("Segoe UI", 10f),
                 Padding = new Point(20, 8)
             };
@@ -150,20 +150,10 @@ namespace ChessLAN
             _hostButton.Click += OnHostClick;
             hostTab.Controls.Add(_hostButton);
 
-            _pcNameLabel = new Label
-            {
-                Text = "",
-                Location = new Point(30, 170),
-                Size = new Size(400, 50),
-                Font = new Font("Consolas", 14f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(52, 120, 200)
-            };
-            hostTab.Controls.Add(_pcNameLabel);
-
             _hostStatusLabel = new Label
             {
                 Text = "",
-                Location = new Point(30, 225),
+                Location = new Point(30, 175),
                 Size = new Size(400, 25),
                 Font = new Font("Segoe UI", 10f),
                 ForeColor = Color.FromArgb(100, 100, 100)
@@ -185,38 +175,42 @@ namespace ChessLAN
             };
             joinTab.Controls.Add(_joinEloLabel);
 
-            var hostNameLabel = new Label
+            var hostListLabel = new Label
             {
-                Text = "Host PC Name:",
-                Location = new Point(30, 70),
+                Text = "Available Games:",
+                Location = new Point(30, 60),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 10f)
             };
-            joinTab.Controls.Add(hostNameLabel);
+            joinTab.Controls.Add(hostListLabel);
 
-            _hostPcNameCombo = new ComboBox
+            _hostListBox = new ListBox
             {
-                Location = new Point(170, 67),
-                Width = 230,
-                Font = new Font("Segoe UI", 10f),
-                DropDownStyle = ComboBoxStyle.DropDown,
-                MaxLength = 50
+                Location = new Point(30, 85),
+                Size = new Size(400, 150),
+                Font = new Font("Segoe UI", 10f)
             };
-            foreach (var h in _settings.HostHistory)
-                _hostPcNameCombo.Items.Add(h);
-            if (_hostPcNameCombo.Items.Count > 0)
-                _hostPcNameCombo.SelectedIndex = 0;
-            joinTab.Controls.Add(_hostPcNameCombo);
+            _hostListBox.SelectedIndexChanged += (s, e) =>
+            {
+                _joinButton.Enabled = _hostListBox.SelectedIndex >= 0 && !_connecting;
+            };
+            _hostListBox.DoubleClick += (s, e) =>
+            {
+                if (_hostListBox.SelectedIndex >= 0 && !_connecting)
+                    OnJoinClick(s, e);
+            };
+            joinTab.Controls.Add(_hostListBox);
 
             _joinButton = new Button
             {
                 Text = "Join",
-                Location = new Point(30, 115),
+                Location = new Point(30, 245),
                 Size = new Size(150, 40),
                 Font = new Font("Segoe UI", 11f, FontStyle.Bold),
                 BackColor = Color.FromArgb(52, 120, 200),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Enabled = false
             };
             _joinButton.FlatAppearance.BorderSize = 0;
             _joinButton.Click += OnJoinClick;
@@ -224,24 +218,112 @@ namespace ChessLAN
 
             _joinStatusLabel = new Label
             {
-                Text = "",
-                Location = new Point(30, 170),
-                Size = new Size(400, 25),
-                Font = new Font("Segoe UI", 10f),
-                ForeColor = Color.FromArgb(100, 100, 100)
+                Text = "Searching for games...",
+                Location = new Point(195, 253),
+                Size = new Size(250, 25),
+                Font = new Font("Segoe UI", 9f),
+                ForeColor = Color.FromArgb(130, 130, 130)
             };
             joinTab.Controls.Add(_joinStatusLabel);
 
             _tabControl.TabPages.Add(joinTab);
             Controls.Add(_tabControl);
+
+            // Cleanup stale hosts every 3 seconds
+            _cleanupTimer = new System.Windows.Forms.Timer { Interval = 3000 };
+            _cleanupTimer.Tick += (s, e) => CleanupStaleHosts();
+            _cleanupTimer.Start();
+
+            // Start discovery on join tab select, and also on load
+            _tabControl.SelectedIndexChanged += (s, e) =>
+            {
+                if (_tabControl.SelectedIndex == 1 && !_isHosting)
+                    StartDiscovery();
+            };
+            Load += (s, e) => StartDiscovery();
         }
 
         private void WireEvents()
         {
+            _network.HostDiscovered += OnHostDiscovered;
             _network.PlayerConnected += OnPlayerConnected;
             _network.GameStarted += OnGameStarted;
             _network.SyncDataReceived += OnSyncDataReceived;
             _network.Disconnected += OnDisconnected;
+        }
+
+        private void StartDiscovery()
+        {
+            _discoveredHosts.Clear();
+            RefreshHostList();
+            try { _network.StartDiscovery(); } catch { }
+        }
+
+        private void OnHostDiscovered(HostInfo host, string senderIp)
+        {
+            if (InvokeRequired) { BeginInvoke(() => OnHostDiscovered(host, senderIp)); return; }
+
+            // Don't show our own hosting
+            if (host.Id == _playerData.Me.Id) return;
+
+            _discoveredHosts[host.Id] = (host, senderIp, DateTime.UtcNow);
+            RefreshHostList();
+        }
+
+        private void CleanupStaleHosts()
+        {
+            var now = DateTime.UtcNow;
+            var stale = _discoveredHosts
+                .Where(kvp => (now - kvp.Value.LastSeen).TotalSeconds > 5)
+                .Select(kvp => kvp.Key)
+                .ToList();
+
+            if (stale.Count > 0)
+            {
+                foreach (var key in stale)
+                    _discoveredHosts.Remove(key);
+                RefreshHostList();
+            }
+        }
+
+        private void RefreshHostList()
+        {
+            var selectedId = _hostListBox.SelectedIndex >= 0 ? GetHostIdAtIndex(_hostListBox.SelectedIndex) : null;
+
+            _hostListBox.Items.Clear();
+            foreach (var kvp in _discoveredHosts.OrderBy(h => h.Value.Info.Name))
+            {
+                var h = kvp.Value.Info;
+                _hostListBox.Items.Add($"{h.Name} (Elo: {h.Elo}) - {h.TimeControl}");
+            }
+
+            if (selectedId != null)
+            {
+                int idx = 0;
+                foreach (var kvp in _discoveredHosts.OrderBy(h => h.Value.Info.Name))
+                {
+                    if (kvp.Key == selectedId) { _hostListBox.SelectedIndex = idx; break; }
+                    idx++;
+                }
+            }
+
+            _joinButton.Enabled = _hostListBox.SelectedIndex >= 0 && !_connecting;
+            _joinStatusLabel.Text = _discoveredHosts.Count == 0 ? "Searching for games..." : "";
+        }
+
+        private string? GetHostIdAtIndex(int index)
+        {
+            var ordered = _discoveredHosts.OrderBy(h => h.Value.Info.Name).ToList();
+            return index >= 0 && index < ordered.Count ? ordered[index].Key : null;
+        }
+
+        private (HostInfo Info, string Ip)? GetSelectedHost()
+        {
+            int index = _hostListBox.SelectedIndex;
+            var ordered = _discoveredHosts.OrderBy(h => h.Value.Info.Name).ToList();
+            return index >= 0 && index < ordered.Count
+                ? (ordered[index].Value.Info, ordered[index].Value.Ip)
+                : null;
         }
 
         private void OnHostClick(object? sender, EventArgs e)
@@ -261,7 +343,6 @@ namespace ChessLAN
                 _hostButton.Text = "Host Game";
                 _hostButton.BackColor = Color.FromArgb(76, 153, 76);
                 _hostStatusLabel.Text = "";
-                _pcNameLabel.Text = "";
                 _timeControlCombo.Enabled = true;
                 return;
             }
@@ -269,14 +350,24 @@ namespace ChessLAN
             _playerData.Me.Name = _nameTextBox.Text.Trim();
             _playerData.Save();
 
-            _network.StartHosting();
+            string timeControl = _timeControlCombo.SelectedItem?.ToString() ?? "5 min";
+            var hostInfo = new HostInfo
+            {
+                Id = _playerData.Me.Id,
+                Name = _playerData.Me.Name,
+                Elo = _playerData.Me.Elo,
+                TimeControl = timeControl,
+                Port = NetworkManager.Port
+            };
+
+            _network.StopDiscovery();
+            _network.StartHosting(hostInfo);
             _network.AcceptConnection();
             _isHosting = true;
             _hostButton.Text = "Stop Hosting";
             _hostButton.BackColor = Color.FromArgb(200, 60, 60);
             _timeControlCombo.Enabled = false;
-            _pcNameLabel.Text = Environment.MachineName;
-            _hostStatusLabel.Text = "Tell your opponent to enter this PC name and click Join.";
+            _hostStatusLabel.Text = "Waiting for opponent...";
         }
 
         private async void OnJoinClick(object? sender, EventArgs e)
@@ -290,14 +381,10 @@ namespace ChessLAN
                 return;
             }
 
-            string hostPcName = _hostPcNameCombo.Text.Trim();
-            if (string.IsNullOrEmpty(hostPcName))
-            {
-                MessageBox.Show("Enter the host's PC name.", "PC Name Required",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                _hostPcNameCombo.Focus();
-                return;
-            }
+            var selected = GetSelectedHost();
+            if (selected == null) return;
+
+            var (hostInfo, hostIp) = selected.Value;
 
             _playerData.Me.Name = _nameTextBox.Text.Trim();
             _playerData.Save();
@@ -308,6 +395,8 @@ namespace ChessLAN
 
             try
             {
+                _network.StopDiscovery();
+
                 var myInfo = new PlayerInfo
                 {
                     Id = _playerData.Me.Id,
@@ -315,24 +404,23 @@ namespace ChessLAN
                     Elo = _playerData.Me.Elo
                 };
 
-                await _network.ConnectToHost(hostPcName, myInfo);
-                _joinStatusLabel.Text = "Connected! Waiting for game start...";
-
-                _settings.AddHost(hostPcName);
-                _settings.Save();
+                await _network.ConnectToHost(hostIp, myInfo);
+                _joinStatusLabel.Text = "Connected! Starting game...";
                 _network.SendSyncData(_playerData.SerializeForSync());
             }
             catch (TimeoutException)
             {
-                _joinStatusLabel.Text = "Connection timed out. Check the PC name.";
+                _joinStatusLabel.Text = "Timed out. Try again.";
                 _connecting = false;
-                _joinButton.Enabled = true;
+                _joinButton.Enabled = _hostListBox.SelectedIndex >= 0;
+                StartDiscovery();
             }
             catch (Exception ex)
             {
                 _joinStatusLabel.Text = $"Failed: {ex.Message}";
                 _connecting = false;
-                _joinButton.Enabled = true;
+                _joinButton.Enabled = _hostListBox.SelectedIndex >= 0;
+                StartDiscovery();
             }
         }
 
@@ -403,14 +491,23 @@ namespace ChessLAN
                 _network.Dispose();
                 _network = new NetworkManager();
                 WireEvents();
-                _network.StartHosting();
+                string timeControl = _timeControlCombo.SelectedItem?.ToString() ?? "5 min";
+                _network.StartHosting(new HostInfo
+                {
+                    Id = _playerData.Me.Id,
+                    Name = _playerData.Me.Name,
+                    Elo = _playerData.Me.Elo,
+                    TimeControl = timeControl,
+                    Port = NetworkManager.Port
+                });
                 _network.AcceptConnection();
             }
             else
             {
                 _joinStatusLabel.Text = "Disconnected.";
                 _connecting = false;
-                _joinButton.Enabled = true;
+                _joinButton.Enabled = _hostListBox.SelectedIndex >= 0;
+                StartDiscovery();
             }
         }
 
@@ -431,7 +528,6 @@ namespace ChessLAN
                 _hostButton.Text = "Host Game";
                 _hostButton.BackColor = Color.FromArgb(76, 153, 76);
                 _hostStatusLabel.Text = "";
-                _pcNameLabel.Text = "";
                 _joinStatusLabel.Text = "";
                 _timeControlCombo.Enabled = true;
                 _hostEloLabel.Text = $"Your Elo: {_playerData.Me.Elo}";
@@ -440,6 +536,7 @@ namespace ChessLAN
                 _network.Dispose();
                 _network = new NetworkManager();
                 WireEvents();
+                StartDiscovery();
 
                 Show();
             };
@@ -451,6 +548,8 @@ namespace ChessLAN
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            _cleanupTimer?.Stop();
+            _cleanupTimer?.Dispose();
             _network?.Dispose();
             base.OnFormClosing(e);
         }
