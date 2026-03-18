@@ -56,12 +56,48 @@ namespace ChessLAN
         private Action? _animOnComplete;
 
         private Font _coordFont;
+        private static readonly Dictionary<string, Image> _pieceImages = new();
 
         public BoardControl()
         {
             DoubleBuffered = true;
             _coordFont = new Font("Segoe UI", 9f, FontStyle.Bold);
             Resize += (s, e) => UpdateCoordFont();
+            LoadPieceImages();
+        }
+
+        private static void LoadPieceImages()
+        {
+            if (_pieceImages.Count > 0) return;
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            var names = new Dictionary<string, string>
+            {
+                ["wK"] = "white-king", ["wQ"] = "white-queen", ["wR"] = "white-rook",
+                ["wB"] = "white-bishop", ["wN"] = "white-knight", ["wP"] = "white-pawn",
+                ["bK"] = "black-king", ["bQ"] = "black-queen", ["bR"] = "black-rook",
+                ["bB"] = "black-bishop", ["bN"] = "black-knight", ["bP"] = "black-pawn",
+            };
+            foreach (var (key, filename) in names)
+            {
+                string resName = $"ChessLAN.Resources.{filename}.png";
+                using var stream = asm.GetManifestResourceStream(resName);
+                if (stream != null)
+                    _pieceImages[key] = Image.FromStream(stream);
+            }
+        }
+
+        private static Image? GetPieceImage(Piece piece)
+        {
+            if (piece.IsEmpty) return null;
+            string prefix = piece.Color == PieceColor.White ? "w" : "b";
+            string suffix = piece.Type switch
+            {
+                PieceType.King => "K", PieceType.Queen => "Q", PieceType.Rook => "R",
+                PieceType.Bishop => "B", PieceType.Knight => "N", PieceType.Pawn => "P",
+                _ => ""
+            };
+            _pieceImages.TryGetValue(prefix + suffix, out var img);
+            return img;
         }
 
         private void UpdateCoordFont()
@@ -343,403 +379,23 @@ namespace ChessLAN
 
         private void DrawPiece(Graphics g, Piece piece, float x, float y, bool dragging = false)
         {
+            var img = GetPieceImage(piece);
+            if (img == null) return;
+
             int sq = SquareSize;
-            float scale = dragging ? 1.1f : 1f;
-            float margin = sq * 0.08f;
-            float size = (sq - margin * 2) * scale;
-            float offsetX = x + (sq - size) / 2f;
-            float offsetY = y + (sq - size) / 2f;
-            if (dragging) offsetY -= sq * 0.05f;
+            float scale = dragging ? 1.15f : 1f;
+            float size = sq * scale;
+            float margin = sq * 0.04f;
+            float drawSize = size - margin * 2;
+            float offsetX = x + (sq - drawSize) / 2f;
+            float offsetY = y + (sq - drawSize) / 2f;
+            if (dragging) offsetY -= sq * 0.06f;
 
-            using var path = GetPiecePath(piece.Type, offsetX, offsetY, size);
-            if (path == null) return;
-
-            // Draw shadow
-            using var shadowBrush = new SolidBrush(Color.FromArgb(40, 0, 0, 0));
-            var savedTransform = g.Transform;
-            g.TranslateTransform(1.5f, 1.5f);
-            g.FillPath(shadowBrush, path);
-            g.Transform = savedTransform;
-
-            // Fill
-            Color fill = piece.Color == PieceColor.White
-                ? Color.FromArgb(255, 255, 255)
-                : Color.FromArgb(64, 48, 48);
-            using var fillBrush = new SolidBrush(fill);
-            g.FillPath(fillBrush, path);
-
-            // Outline
-            Color outline = piece.Color == PieceColor.White
-                ? Color.FromArgb(51, 51, 51)
-                : Color.FromArgb(26, 26, 26);
-            float strokeW = Math.Max(1f, sq / 40f);
-            using var pen = new Pen(outline, strokeW);
-            pen.LineJoin = LineJoin.Round;
-            g.DrawPath(pen, path);
-
-            // For white pieces draw a subtle inner highlight on certain pieces
-            // For black pieces draw a subtle lighter edge along the top
-            if (piece.Color == PieceColor.Black)
-            {
-                using var edgePen = new Pen(Color.FromArgb(30, 200, 200, 200), Math.Max(0.5f, sq / 80f));
-                edgePen.LineJoin = LineJoin.Round;
-                g.DrawPath(edgePen, path);
-            }
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.DrawImage(img, offsetX, offsetY, drawSize, drawSize);
         }
 
-        private GraphicsPath? GetPiecePath(PieceType type, float x, float y, float size)
-        {
-            return type switch
-            {
-                PieceType.Pawn => BuildPawnPath(x, y, size),
-                PieceType.Rook => BuildRookPath(x, y, size),
-                PieceType.Knight => BuildKnightPath(x, y, size),
-                PieceType.Bishop => BuildBishopPath(x, y, size),
-                PieceType.Queen => BuildQueenPath(x, y, size),
-                PieceType.King => BuildKingPath(x, y, size),
-                _ => null
-            };
-        }
-
-        // Helper: convert normalized (0-1) coordinates to actual pixel coordinates
-        private PointF P(float nx, float ny, float x, float y, float size)
-        {
-            return new PointF(x + nx * size, y + ny * size);
-        }
-
-        private GraphicsPath BuildPawnPath(float x, float y, float size)
-        {
-            var path = new GraphicsPath();
-
-            // Head (circle)
-            float headCx = 0.50f, headCy = 0.26f, headR = 0.14f;
-            path.AddEllipse(
-                x + (headCx - headR) * size, y + (headCy - headR) * size,
-                headR * 2 * size, headR * 2 * size);
-
-            // Neck + body + base as a single polygon shape
-            var body = new GraphicsPath();
-            body.AddLine(P(0.40f, 0.38f, x, y, size), P(0.60f, 0.38f, x, y, size));
-            body.AddLine(P(0.60f, 0.38f, x, y, size), P(0.65f, 0.50f, x, y, size));
-            body.AddLine(P(0.65f, 0.50f, x, y, size), P(0.68f, 0.70f, x, y, size));
-            body.AddLine(P(0.68f, 0.70f, x, y, size), P(0.72f, 0.74f, x, y, size));
-            body.AddLine(P(0.72f, 0.74f, x, y, size), P(0.78f, 0.74f, x, y, size));
-            body.AddLine(P(0.78f, 0.74f, x, y, size), P(0.80f, 0.78f, x, y, size));
-            body.AddLine(P(0.80f, 0.78f, x, y, size), P(0.80f, 0.86f, x, y, size));
-            body.AddLine(P(0.80f, 0.86f, x, y, size), P(0.20f, 0.86f, x, y, size));
-            body.AddLine(P(0.20f, 0.86f, x, y, size), P(0.20f, 0.78f, x, y, size));
-            body.AddLine(P(0.20f, 0.78f, x, y, size), P(0.22f, 0.74f, x, y, size));
-            body.AddLine(P(0.22f, 0.74f, x, y, size), P(0.28f, 0.74f, x, y, size));
-            body.AddLine(P(0.28f, 0.74f, x, y, size), P(0.32f, 0.70f, x, y, size));
-            body.AddLine(P(0.32f, 0.70f, x, y, size), P(0.35f, 0.50f, x, y, size));
-            body.AddLine(P(0.35f, 0.50f, x, y, size), P(0.40f, 0.38f, x, y, size));
-            body.CloseFigure();
-
-            path.AddPath(body, false);
-            return path;
-        }
-
-        private GraphicsPath BuildRookPath(float x, float y, float size)
-        {
-            var path = new GraphicsPath();
-
-            // Rook outline as a single closed polygon
-            var points = new PointF[]
-            {
-                // Left battlement
-                P(0.18f, 0.12f, x, y, size),
-                P(0.30f, 0.12f, x, y, size),
-                P(0.30f, 0.22f, x, y, size),
-                // Gap
-                P(0.38f, 0.22f, x, y, size),
-                P(0.38f, 0.12f, x, y, size),
-                // Middle battlement
-                P(0.62f, 0.12f, x, y, size),
-                P(0.62f, 0.22f, x, y, size),
-                // Gap
-                P(0.70f, 0.22f, x, y, size),
-                P(0.70f, 0.12f, x, y, size),
-                // Right battlement
-                P(0.82f, 0.12f, x, y, size),
-                P(0.82f, 0.28f, x, y, size),
-                // Top band right
-                P(0.78f, 0.32f, x, y, size),
-                // Body right (slight taper outward going down)
-                P(0.74f, 0.36f, x, y, size),
-                P(0.72f, 0.68f, x, y, size),
-                // Bottom band right
-                P(0.78f, 0.72f, x, y, size),
-                P(0.84f, 0.76f, x, y, size),
-                P(0.84f, 0.88f, x, y, size),
-                // Base bottom
-                P(0.16f, 0.88f, x, y, size),
-                // Bottom band left
-                P(0.16f, 0.76f, x, y, size),
-                P(0.22f, 0.72f, x, y, size),
-                // Body left
-                P(0.28f, 0.68f, x, y, size),
-                P(0.26f, 0.36f, x, y, size),
-                // Top band left
-                P(0.22f, 0.32f, x, y, size),
-                P(0.18f, 0.28f, x, y, size),
-            };
-
-            path.AddPolygon(points);
-            return path;
-        }
-
-        private GraphicsPath BuildKnightPath(float x, float y, float size)
-        {
-            var path = new GraphicsPath();
-
-            // Horse head profile facing right, built with bezier curves
-            path.StartFigure();
-
-            // Start at base left
-            PointF start = P(0.20f, 0.88f, x, y, size);
-            path.AddLine(start, P(0.80f, 0.88f, x, y, size));
-            // Base right up to bottom of neck
-            path.AddLine(P(0.80f, 0.88f, x, y, size), P(0.80f, 0.78f, x, y, size));
-            path.AddLine(P(0.80f, 0.78f, x, y, size), P(0.72f, 0.74f, x, y, size));
-            path.AddLine(P(0.72f, 0.74f, x, y, size), P(0.68f, 0.60f, x, y, size));
-
-            // Nose / muzzle area
-            path.AddBezier(
-                P(0.68f, 0.60f, x, y, size),
-                P(0.80f, 0.48f, x, y, size),
-                P(0.82f, 0.38f, x, y, size),
-                P(0.74f, 0.34f, x, y, size));
-
-            // Mouth indent
-            path.AddLine(P(0.74f, 0.34f, x, y, size), P(0.68f, 0.38f, x, y, size));
-
-            // Chin to forehead curve
-            path.AddBezier(
-                P(0.68f, 0.38f, x, y, size),
-                P(0.72f, 0.30f, x, y, size),
-                P(0.70f, 0.22f, x, y, size),
-                P(0.62f, 0.16f, x, y, size));
-
-            // Ear (triangle spike)
-            path.AddLine(P(0.62f, 0.16f, x, y, size), P(0.56f, 0.06f, x, y, size));
-            path.AddLine(P(0.56f, 0.06f, x, y, size), P(0.48f, 0.18f, x, y, size));
-
-            // Back of head down the neck
-            path.AddBezier(
-                P(0.48f, 0.18f, x, y, size),
-                P(0.40f, 0.24f, x, y, size),
-                P(0.34f, 0.34f, x, y, size),
-                P(0.30f, 0.46f, x, y, size));
-
-            // Down the back
-            path.AddBezier(
-                P(0.30f, 0.46f, x, y, size),
-                P(0.26f, 0.56f, x, y, size),
-                P(0.24f, 0.66f, x, y, size),
-                P(0.28f, 0.74f, x, y, size));
-
-            path.AddLine(P(0.28f, 0.74f, x, y, size), P(0.20f, 0.78f, x, y, size));
-            path.AddLine(P(0.20f, 0.78f, x, y, size), P(0.20f, 0.88f, x, y, size));
-
-            path.CloseFigure();
-
-            // Eye (small filled circle) - we add it as a separate figure
-            float eyeCx = 0.60f, eyeCy = 0.28f, eyeR = 0.030f;
-            path.AddEllipse(
-                x + (eyeCx - eyeR) * size, y + (eyeCy - eyeR) * size,
-                eyeR * 2 * size, eyeR * 2 * size);
-
-            return path;
-        }
-
-        private GraphicsPath BuildBishopPath(float x, float y, float size)
-        {
-            var path = new GraphicsPath();
-
-            // Ball at top
-            float ballCx = 0.50f, ballCy = 0.10f, ballR = 0.055f;
-            path.AddEllipse(
-                x + (ballCx - ballR) * size, y + (ballCy - ballR) * size,
-                ballR * 2 * size, ballR * 2 * size);
-
-            // Mitre / hat shape using beziers for a nice pointed shape
-            var mitre = new GraphicsPath();
-            mitre.StartFigure();
-            // Tip
-            PointF tip = P(0.50f, 0.15f, x, y, size);
-            mitre.AddLine(tip, tip); // start point
-            // Right side of hat
-            mitre.AddBezier(
-                P(0.50f, 0.15f, x, y, size),
-                P(0.58f, 0.28f, x, y, size),
-                P(0.66f, 0.40f, x, y, size),
-                P(0.66f, 0.52f, x, y, size));
-            // Collar right
-            mitre.AddLine(P(0.66f, 0.52f, x, y, size), P(0.68f, 0.58f, x, y, size));
-            mitre.AddLine(P(0.68f, 0.58f, x, y, size), P(0.64f, 0.62f, x, y, size));
-            // Body taper down right
-            mitre.AddLine(P(0.64f, 0.62f, x, y, size), P(0.66f, 0.72f, x, y, size));
-            // Base platform right
-            mitre.AddLine(P(0.66f, 0.72f, x, y, size), P(0.76f, 0.76f, x, y, size));
-            mitre.AddLine(P(0.76f, 0.76f, x, y, size), P(0.80f, 0.80f, x, y, size));
-            mitre.AddLine(P(0.80f, 0.80f, x, y, size), P(0.80f, 0.88f, x, y, size));
-            // Base bottom
-            mitre.AddLine(P(0.80f, 0.88f, x, y, size), P(0.20f, 0.88f, x, y, size));
-            // Base platform left
-            mitre.AddLine(P(0.20f, 0.88f, x, y, size), P(0.20f, 0.80f, x, y, size));
-            mitre.AddLine(P(0.20f, 0.80f, x, y, size), P(0.24f, 0.76f, x, y, size));
-            mitre.AddLine(P(0.24f, 0.76f, x, y, size), P(0.34f, 0.72f, x, y, size));
-            // Body taper down left
-            mitre.AddLine(P(0.34f, 0.72f, x, y, size), P(0.36f, 0.62f, x, y, size));
-            // Collar left
-            mitre.AddLine(P(0.36f, 0.62f, x, y, size), P(0.32f, 0.58f, x, y, size));
-            mitre.AddLine(P(0.32f, 0.58f, x, y, size), P(0.34f, 0.52f, x, y, size));
-            // Left side of hat
-            mitre.AddBezier(
-                P(0.34f, 0.52f, x, y, size),
-                P(0.34f, 0.40f, x, y, size),
-                P(0.42f, 0.28f, x, y, size),
-                P(0.50f, 0.15f, x, y, size));
-            mitre.CloseFigure();
-            path.AddPath(mitre, false);
-
-            // Diagonal slit across mitre (drawn as a thin angled rectangle)
-            var slit = new GraphicsPath();
-            float slitW = 0.018f;
-            slit.AddPolygon(new PointF[]
-            {
-                P(0.38f, 0.42f - slitW, x, y, size),
-                P(0.58f, 0.26f - slitW, x, y, size),
-                P(0.58f, 0.26f + slitW, x, y, size),
-                P(0.38f, 0.42f + slitW, x, y, size),
-            });
-            path.AddPath(slit, false);
-
-            return path;
-        }
-
-        private GraphicsPath BuildQueenPath(float x, float y, float size)
-        {
-            var path = new GraphicsPath();
-
-            // Five spike tips with small balls
-            float[] spikeTipsX = { 0.14f, 0.28f, 0.50f, 0.72f, 0.86f };
-            float[] spikeTipsY = { 0.22f, 0.10f, 0.04f, 0.10f, 0.22f };
-            float ballR = 0.040f;
-
-            for (int i = 0; i < 5; i++)
-            {
-                path.AddEllipse(
-                    x + (spikeTipsX[i] - ballR) * size, y + (spikeTipsY[i] - ballR) * size,
-                    ballR * 2 * size, ballR * 2 * size);
-            }
-
-            // Crown + body as one polygon
-            var crown = new GraphicsPath();
-            crown.StartFigure();
-
-            // Build the crown outline: go across the spikes from left to right
-            // then down the body
-            crown.AddLine(P(0.14f, 0.26f, x, y, size), P(0.20f, 0.36f, x, y, size));
-            crown.AddLine(P(0.20f, 0.36f, x, y, size), P(0.28f, 0.14f, x, y, size));
-            crown.AddLine(P(0.28f, 0.14f, x, y, size), P(0.36f, 0.34f, x, y, size));
-            crown.AddLine(P(0.36f, 0.34f, x, y, size), P(0.50f, 0.08f, x, y, size));
-            crown.AddLine(P(0.50f, 0.08f, x, y, size), P(0.64f, 0.34f, x, y, size));
-            crown.AddLine(P(0.64f, 0.34f, x, y, size), P(0.72f, 0.14f, x, y, size));
-            crown.AddLine(P(0.72f, 0.14f, x, y, size), P(0.80f, 0.36f, x, y, size));
-            crown.AddLine(P(0.80f, 0.36f, x, y, size), P(0.86f, 0.26f, x, y, size));
-
-            // Right side down
-            crown.AddLine(P(0.86f, 0.26f, x, y, size), P(0.78f, 0.46f, x, y, size));
-            // Crown band
-            crown.AddLine(P(0.78f, 0.46f, x, y, size), P(0.74f, 0.50f, x, y, size));
-            // Body right
-            crown.AddLine(P(0.74f, 0.50f, x, y, size), P(0.70f, 0.70f, x, y, size));
-            // Base right
-            crown.AddLine(P(0.70f, 0.70f, x, y, size), P(0.78f, 0.74f, x, y, size));
-            crown.AddLine(P(0.78f, 0.74f, x, y, size), P(0.82f, 0.78f, x, y, size));
-            crown.AddLine(P(0.82f, 0.78f, x, y, size), P(0.82f, 0.88f, x, y, size));
-            // Base bottom
-            crown.AddLine(P(0.82f, 0.88f, x, y, size), P(0.18f, 0.88f, x, y, size));
-            // Base left
-            crown.AddLine(P(0.18f, 0.88f, x, y, size), P(0.18f, 0.78f, x, y, size));
-            crown.AddLine(P(0.18f, 0.78f, x, y, size), P(0.22f, 0.74f, x, y, size));
-            crown.AddLine(P(0.22f, 0.74f, x, y, size), P(0.30f, 0.70f, x, y, size));
-            // Body left
-            crown.AddLine(P(0.30f, 0.70f, x, y, size), P(0.26f, 0.50f, x, y, size));
-            // Crown band left
-            crown.AddLine(P(0.26f, 0.50f, x, y, size), P(0.22f, 0.46f, x, y, size));
-            // Left side up
-            crown.AddLine(P(0.22f, 0.46f, x, y, size), P(0.14f, 0.26f, x, y, size));
-
-            crown.CloseFigure();
-            path.AddPath(crown, false);
-
-            return path;
-        }
-
-        private GraphicsPath BuildKingPath(float x, float y, float size)
-        {
-            var path = new GraphicsPath();
-
-            // Cross at top
-            // Vertical bar
-            path.AddRectangle(new RectangleF(
-                x + 0.46f * size, y + 0.04f * size,
-                0.08f * size, 0.16f * size));
-            // Horizontal bar
-            path.AddRectangle(new RectangleF(
-                x + 0.38f * size, y + 0.08f * size,
-                0.24f * size, 0.07f * size));
-
-            // Crown band + body + base as one polygon
-            var body = new GraphicsPath();
-            body.StartFigure();
-
-            // Crown band top (with small zigzag/pointed bottom)
-            body.AddLine(P(0.30f, 0.22f, x, y, size), P(0.70f, 0.22f, x, y, size));
-            body.AddLine(P(0.70f, 0.22f, x, y, size), P(0.72f, 0.28f, x, y, size));
-            // Zigzag bottom of crown band
-            body.AddLine(P(0.72f, 0.28f, x, y, size), P(0.66f, 0.34f, x, y, size));
-            body.AddLine(P(0.66f, 0.34f, x, y, size), P(0.58f, 0.30f, x, y, size));
-            body.AddLine(P(0.58f, 0.30f, x, y, size), P(0.50f, 0.36f, x, y, size));
-            body.AddLine(P(0.50f, 0.36f, x, y, size), P(0.42f, 0.30f, x, y, size));
-            body.AddLine(P(0.42f, 0.30f, x, y, size), P(0.34f, 0.34f, x, y, size));
-            body.AddLine(P(0.34f, 0.34f, x, y, size), P(0.28f, 0.28f, x, y, size));
-
-            // Left side body
-            body.AddLine(P(0.28f, 0.28f, x, y, size), P(0.30f, 0.46f, x, y, size));
-            // Waist indent
-            body.AddLine(P(0.30f, 0.46f, x, y, size), P(0.32f, 0.56f, x, y, size));
-            body.AddLine(P(0.32f, 0.56f, x, y, size), P(0.30f, 0.66f, x, y, size));
-            // Flare to base left
-            body.AddLine(P(0.30f, 0.66f, x, y, size), P(0.34f, 0.72f, x, y, size));
-            body.AddLine(P(0.34f, 0.72f, x, y, size), P(0.24f, 0.76f, x, y, size));
-            body.AddLine(P(0.24f, 0.76f, x, y, size), P(0.18f, 0.80f, x, y, size));
-            body.AddLine(P(0.18f, 0.80f, x, y, size), P(0.18f, 0.88f, x, y, size));
-            // Base bottom
-            body.AddLine(P(0.18f, 0.88f, x, y, size), P(0.82f, 0.88f, x, y, size));
-            // Base right
-            body.AddLine(P(0.82f, 0.88f, x, y, size), P(0.82f, 0.80f, x, y, size));
-            body.AddLine(P(0.82f, 0.80f, x, y, size), P(0.76f, 0.76f, x, y, size));
-            body.AddLine(P(0.76f, 0.76f, x, y, size), P(0.66f, 0.72f, x, y, size));
-            // Flare to body right
-            body.AddLine(P(0.66f, 0.72f, x, y, size), P(0.70f, 0.66f, x, y, size));
-            body.AddLine(P(0.70f, 0.66f, x, y, size), P(0.68f, 0.56f, x, y, size));
-            body.AddLine(P(0.68f, 0.56f, x, y, size), P(0.70f, 0.46f, x, y, size));
-            // Right side body up
-            body.AddLine(P(0.70f, 0.46f, x, y, size), P(0.72f, 0.28f, x, y, size));
-
-            // Back to start (already at crown band top-right -> connect to top-left)
-            body.AddLine(P(0.72f, 0.28f, x, y, size), P(0.30f, 0.22f, x, y, size));
-
-            body.CloseFigure();
-            path.AddPath(body, false);
-
-            return path;
-        }
-
-        // ─── Mouse Handling (unchanged) ─────────────────────────────────
+        // ─── Mouse Handling ─────────────────────────────────
 
         protected override void OnMouseDown(MouseEventArgs e)
         {

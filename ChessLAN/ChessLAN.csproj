@@ -15,4 +15,8 @@
     <RootNamespace>ChessLAN</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\*.png" />
+  </ItemGroup>
+
 </Project>
