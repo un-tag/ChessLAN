@@ -430,12 +430,22 @@ namespace ChessLAN
 
             var move = ChessLAN.Move.FromAlgebraic(msg.Move);
 
-            // Animate the move
+            // Pre-determine sound type before animation (check if it's a capture)
+            bool isCapture = !_board.GetPiece(move.ToRow, move.ToCol).IsEmpty;
+            // Also check en passant capture
+            if (!isCapture && _board.GetPiece(move.FromRow, move.FromCol).Type == PieceType.Pawn
+                && move.FromCol != move.ToCol)
+                isCapture = true;
+
+            // Apply move FIRST to know if it's check, then animate visually
+            var result = _board.MakeMove(move);
+
+            // Play sound IMMEDIATELY (not after animation)
+            PlayMoveSound(result);
+
+            // Animate the move visually
             _boardControl.AnimateMove(move, () =>
             {
-                // Apply move after animation
-                var result = _board.MakeMove(move);
-
                 // Track captures
                 if (result.IsCapture && !result.CapturedPiece.IsEmpty)
                 {
@@ -446,9 +456,6 @@ namespace ChessLAN
                 _boardControl.SetLastMove(move);
                 _boardControl.Board = _board;
                 _boardControl.Invalidate();
-
-                // Play sound
-                PlayMoveSound(result);
 
                 // Sync clock
                 _clock.SetTimes(
