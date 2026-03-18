@@ -37,6 +37,7 @@ namespace ChessLAN
         private bool _opponentRematchRequested;
         private AppSettings _settings;
         private CheckBox _showMovesCheckBox = null!;
+        private Label _recordLabel = null!;
 
         public GameForm(NetworkManager network, PlayerDataStore playerData,
                         PieceColor myColor, string opponentId, string opponentName,
@@ -60,6 +61,8 @@ namespace ChessLAN
 
             InitializeUI();
             WireEvents();
+            Resize += (s, ev) => LayoutControls();
+            Load += (s, ev) => LayoutControls();
 
             // Start the clock for white
             _boardControl.Board = _board;
@@ -75,26 +78,20 @@ namespace ChessLAN
             Text = $"ChessLAN - {_playerData.Me.Name} vs {_opponentName}";
             WindowState = FormWindowState.Maximized;
             FormBorderStyle = FormBorderStyle.Sizable;
+            MinimumSize = new Size(700, 500);
             BackColor = Color.FromArgb(40, 40, 40);
             KeyPreview = true;
             KeyDown += (s, ev) => { if (ev.KeyCode == Keys.Escape) Close(); };
 
-            // Calculate board size to fit screen height
-            var screen = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
-            int boardSize = Math.Min(screen.Height - 40, screen.Width - 350);
-            boardSize = (boardSize / 8) * 8; // Round to multiple of 8
-
-            // Board control
+            // Board control (will be positioned by LayoutControls)
             _boardControl = new BoardControl
             {
-                Location = new Point(20, (screen.Height - boardSize) / 2 - 20),
-                Size = new Size(boardSize, boardSize),
                 ShowLegalMoves = _settings.ShowLegalMoves
             };
             Controls.Add(_boardControl);
 
-            // Right panel
-            int panelX = _boardControl.Right + 30;
+            // Placeholder values — LayoutControls sets final positions
+            int panelX = 0;
             int panelWidth = 300;
 
             int boardTop = _boardControl.Top;
@@ -153,7 +150,7 @@ namespace ChessLAN
 
             // Head to head record
             var (wins, losses, draws) = _playerData.GetRecord(_opponentId);
-            var recordLabel = new Label
+            _recordLabel = new Label
             {
                 Text = $"Record: {wins}W - {losses}L - {draws}D",
                 Location = new Point(panelX, panelMidY - 30),
@@ -162,7 +159,7 @@ namespace ChessLAN
                 ForeColor = Color.FromArgb(150, 150, 150),
                 TextAlign = ContentAlignment.MiddleCenter
             };
-            Controls.Add(recordLabel);
+            Controls.Add(_recordLabel);
 
             // Buttons
             _resignButton = new Button
@@ -264,6 +261,60 @@ namespace ChessLAN
                 TextAlign = ContentAlignment.MiddleLeft
             };
             Controls.Add(_myNameLabel);
+        }
+
+        private void LayoutControls()
+        {
+            int cw = ClientSize.Width;
+            int ch = ClientSize.Height;
+            int margin = 20;
+
+            // Board: square, fitted to height with room for the side panel
+            int boardSize = Math.Min(ch - margin * 2, cw - 350);
+            boardSize = Math.Max(160, (boardSize / 8) * 8);
+
+            int boardX = margin;
+            int boardY = (ch - boardSize) / 2;
+
+            _boardControl.Location = new Point(boardX, boardY);
+            _boardControl.Size = new Size(boardSize, boardSize);
+
+            int px = _boardControl.Right + 30;
+            int pw = Math.Max(200, cw - px - margin);
+            int bt = boardY;
+            int bb = boardY + boardSize;
+            int mid = (bt + bb) / 2;
+
+            _opponentNameLabel.Location = new Point(px, bt);
+            _opponentNameLabel.Size = new Size(pw, 28);
+
+            _opponentClockLabel.Location = new Point(px, bt + 32);
+            _opponentClockLabel.Size = new Size(pw, 55);
+
+            _opponentCapturedLabel.Location = new Point(px, bt + 95);
+            _opponentCapturedLabel.Size = new Size(pw, 30);
+
+            _statusLabel.Location = new Point(px, mid - 60);
+            _statusLabel.Size = new Size(pw, 25);
+
+            _recordLabel.Location = new Point(px, mid - 30);
+            _recordLabel.Size = new Size(pw, 22);
+
+            _resignButton.Location = new Point(px, mid + 5);
+            _drawButton.Location = new Point(px + 100, mid + 5);
+            _rematchButton.Location = new Point(px + 205, mid + 5);
+
+            _showMovesCheckBox.Location = new Point(px, mid + 55);
+            _showMovesCheckBox.Size = new Size(pw, 24);
+
+            _myCapturedLabel.Location = new Point(px, bb - 130);
+            _myCapturedLabel.Size = new Size(pw, 30);
+
+            _myClockLabel.Location = new Point(px, bb - 90);
+            _myClockLabel.Size = new Size(pw, 55);
+
+            _myNameLabel.Location = new Point(px, bb - 30);
+            _myNameLabel.Size = new Size(pw, 28);
         }
 
         private void WireEvents()
