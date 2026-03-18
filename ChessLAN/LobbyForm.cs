@@ -66,25 +66,26 @@ namespace ChessLAN
                 Text = "ChessLAN",
                 Font = new Font("Segoe UI", 28f, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter,
-                Dock = DockStyle.Top,
-                Height = 70,
+                Location = new Point(0, 10),
+                Size = new Size(484, 60),
                 ForeColor = Color.FromArgb(50, 50, 50)
             };
             Controls.Add(titleLabel);
 
-            // Name panel
-            var namePanel = new Panel { Dock = DockStyle.Top, Height = 50, Padding = new Padding(20, 5, 20, 5) };
+            // Name row
             var nameLabel = new Label
             {
                 Text = "Your Name:",
-                Location = new Point(20, 15),
+                Location = new Point(20, 80),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 10f)
             };
+            Controls.Add(nameLabel);
+
             _nameTextBox = new TextBox
             {
-                Location = new Point(120, 12),
-                Width = 330,
+                Location = new Point(120, 77),
+                Width = 340,
                 Font = new Font("Segoe UI", 10f),
                 MaxLength = 30
             };
@@ -93,14 +94,13 @@ namespace ChessLAN
                 _playerData.Me.Name = _nameTextBox.Text.Trim();
                 _playerData.Save();
             };
-            namePanel.Controls.Add(nameLabel);
-            namePanel.Controls.Add(_nameTextBox);
-            Controls.Add(namePanel);
+            Controls.Add(_nameTextBox);
 
             // Tab control
             _tabControl = new TabControl
             {
-                Dock = DockStyle.Fill,
+                Location = new Point(10, 115),
+                Size = new Size(464, 435),
                 Font = new Font("Segoe UI", 10f),
                 Padding = new Point(20, 8)
             };
