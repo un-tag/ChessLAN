@@ -52,11 +52,24 @@ namespace ChessLAN
         private PointF _animTo;
         private PointF _animCurrent;
         private DateTime _animStart;
-        private const int AnimDurationMs = 150;
+        private int _animDurationMs = 150;
         private Action? _animOnComplete;
 
         private Font _coordFont;
         private static readonly Dictionary<string, Image> _pieceImages = new();
+
+        // Cached brushes to avoid per-frame GDI+ allocations
+        private readonly SolidBrush _lightSquareBrush = new(LightSquare);
+        private readonly SolidBrush _darkSquareBrush = new(DarkSquare);
+        private readonly SolidBrush _lastMoveLightBrush = new(LastMoveLight);
+        private readonly SolidBrush _lastMoveDarkBrush = new(LastMoveDark);
+        private readonly SolidBrush _premoveLightBrush = new(PremoveLight);
+        private readonly SolidBrush _premoveDarkBrush = new(PremoveDark);
+        private readonly SolidBrush _checkHighlightBrush = new(CheckHighlight);
+        private readonly SolidBrush _legalMoveDotBrush = new(LegalMoveDot);
+        private readonly SolidBrush _legalMoveCaptureBrush = new(LegalMoveCapture);
+        private readonly SolidBrush _coordDarkBrush = new(DarkSquare);
+        private readonly SolidBrush _coordLightBrush = new(LightSquare);
 
         public BoardControl()
         {
@@ -128,7 +141,7 @@ namespace ChessLAN
             return pm;
         }
 
-        public void AnimateMove(Move move, Action onComplete)
+        public void AnimateMove(Move move, Action onComplete, int durationMs = 150)
         {
             _animating = true;
             _animMove = move;
@@ -138,6 +151,7 @@ namespace ChessLAN
             _animCurrent = _animFrom;
             _animStart = DateTime.UtcNow;
             _animOnComplete = onComplete;
+            _animDurationMs = durationMs;
 
             _animTimer?.Dispose();
             _animTimer = new System.Windows.Forms.Timer();
@@ -150,7 +164,7 @@ namespace ChessLAN
         private void AnimTick(object? sender, EventArgs e)
         {
             double elapsed = (DateTime.UtcNow - _animStart).TotalMilliseconds;
-            float t = Math.Min(1f, (float)(elapsed / AnimDurationMs));
+            float t = Math.Min(1f, (float)(elapsed / _animDurationMs));
             // Ease out
             t = 1f - (1f - t) * (1f - t);
 
@@ -209,7 +223,7 @@ namespace ChessLAN
         {
             base.OnPaint(e);
             var g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.SmoothingMode = SmoothingMode.Default;
             g.TextRenderingHint = TextRenderingHint.AntiAlias;
             int sq = SquareSize;
 
@@ -218,9 +232,7 @@ namespace ChessLAN
             {
                 for (int dc = 0; dc < 8; dc++)
                 {
-                    bool light = IsLightSquare(dr, dc);
-                    Color color = light ? LightSquare : DarkSquare;
-                    using var brush = new SolidBrush(color);
+                    var brush = IsLightSquare(dr, dc) ? _lightSquareBrush : _darkSquareBrush;
                     g.FillRectangle(brush, dc * sq, dr * sq, sq, sq);
                 }
             }
@@ -243,11 +255,8 @@ namespace ChessLAN
             {
                 var (dr1, dc1) = BoardToDisplay(_premove.Value.FromRow, _premove.Value.FromCol);
                 var (dr2, dc2) = BoardToDisplay(_premove.Value.ToRow, _premove.Value.ToCol);
-                bool l1 = IsLightSquare(dr1, dc1), l2 = IsLightSquare(dr2, dc2);
-                using var b1 = new SolidBrush(l1 ? PremoveLight : PremoveDark);
-                using var b2 = new SolidBrush(l2 ? PremoveLight : PremoveDark);
-                g.FillRectangle(b1, dc1 * sq, dr1 * sq, sq, sq);
-                g.FillRectangle(b2, dc2 * sq, dr2 * sq, sq, sq);
+                g.FillRectangle(IsLightSquare(dr1, dc1) ? _premoveLightBrush : _premoveDarkBrush, dc1 * sq, dr1 * sq, sq, sq);
+                g.FillRectangle(IsLightSquare(dr2, dc2) ? _premoveLightBrush : _premoveDarkBrush, dc2 * sq, dr2 * sq, sq, sq);
             }
 
             // Draw check highlight (radial gradient on king square)
@@ -268,7 +277,7 @@ namespace ChessLAN
                             using var pgb = new PathGradientBrush(path);
                             pgb.CenterColor = Color.FromArgb(220, 255, 0, 0);
                             pgb.SurroundColors = new[] { Color.FromArgb(60, 255, 0, 0) };
-                            g.FillRectangle(new SolidBrush(CheckHighlight), dCol * sq, dRow * sq, sq, sq);
+                            g.FillRectangle(_checkHighlightBrush, dCol * sq, dRow * sq, sq, sq);
                         }
                     }
             }
@@ -280,21 +289,20 @@ namespace ChessLAN
                 int boardCol = MyColor == PieceColor.Black ? 7 - i : i;
                 char file = (char)('a' + boardCol);
                 bool bottomLight = IsLightSquare(7, i);
-                using var fileBrush = new SolidBrush(bottomLight ? DarkSquare : LightSquare);
-                g.DrawString(file.ToString(), _coordFont, fileBrush,
+                g.DrawString(file.ToString(), _coordFont, bottomLight ? _coordDarkBrush : _coordLightBrush,
                     i * sq + 2, 7 * sq + sq - _coordFont.GetHeight(g) - 1);
 
                 // Rank labels (top of each row on left edge, inside the square)
                 int boardRow = MyColor == PieceColor.Black ? i : 7 - i;
                 char rank = (char)('1' + boardRow);
                 bool leftLight = IsLightSquare(i, 0);
-                using var rankBrush = new SolidBrush(leftLight ? DarkSquare : LightSquare);
-                g.DrawString(rank.ToString(), _coordFont, rankBrush, 2, i * sq + 1);
+                g.DrawString(rank.ToString(), _coordFont, leftLight ? _coordDarkBrush : _coordLightBrush, 2, i * sq + 1);
             }
 
-            // Draw legal move indicators
+            // Draw legal move indicators (ellipses need anti-aliasing)
             if (ShowLegalMoves && (_dragFrom.HasValue || _selectedSquare.HasValue) && _legalMoves != null)
             {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
                 foreach (var move in _legalMoves)
                 {
                     var (dRow, dCol) = BoardToDisplay(move.ToRow, move.ToCol);
@@ -313,17 +321,16 @@ namespace ChessLAN
                         innerPath.AddEllipse(cx - ringInner / 2, cy - ringInner / 2, ringInner, ringInner);
                         using var region = new Region(outerPath);
                         region.Exclude(innerPath);
-                        using var brush = new SolidBrush(LegalMoveCapture);
-                        g.FillRegion(brush, region);
+                        g.FillRegion(_legalMoveCaptureBrush, region);
                     }
                     else
                     {
                         // Chess.com style: small centered dot
                         int dotSize = (int)(sq * 0.3);
-                        using var brush = new SolidBrush(LegalMoveDot);
-                        g.FillEllipse(brush, cx - dotSize / 2, cy - dotSize / 2, dotSize, dotSize);
+                        g.FillEllipse(_legalMoveDotBrush, cx - dotSize / 2, cy - dotSize / 2, dotSize, dotSize);
                     }
                 }
+                g.SmoothingMode = SmoothingMode.Default;
             }
 
             // Draw pieces
@@ -369,9 +376,7 @@ namespace ChessLAN
         private void DrawSquareColor(Graphics g, int boardRow, int boardCol)
         {
             var (dRow, dCol) = BoardToDisplay(boardRow, boardCol);
-            bool light = IsLightSquare(dRow, dCol);
-            Color color = light ? LastMoveLight : LastMoveDark;
-            using var brush = new SolidBrush(color);
+            var brush = IsLightSquare(dRow, dCol) ? _lastMoveLightBrush : _lastMoveDarkBrush;
             g.FillRectangle(brush, dCol * SquareSize, dRow * SquareSize, SquareSize, SquareSize);
         }
 
@@ -391,7 +396,7 @@ namespace ChessLAN
             float offsetY = y + (sq - drawSize) / 2f;
             if (dragging) offsetY -= sq * 0.06f;
 
-            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.InterpolationMode = InterpolationMode.Bilinear;
             g.DrawImage(img, offsetX, offsetY, drawSize, drawSize);
         }
 
@@ -681,6 +686,17 @@ namespace ChessLAN
                 _animTimer?.Stop();
                 _animTimer?.Dispose();
                 _coordFont?.Dispose();
+                _lightSquareBrush.Dispose();
+                _darkSquareBrush.Dispose();
+                _lastMoveLightBrush.Dispose();
+                _lastMoveDarkBrush.Dispose();
+                _premoveLightBrush.Dispose();
+                _premoveDarkBrush.Dispose();
+                _checkHighlightBrush.Dispose();
+                _legalMoveDotBrush.Dispose();
+                _legalMoveCaptureBrush.Dispose();
+                _coordDarkBrush.Dispose();
+                _coordLightBrush.Dispose();
             }
             base.Dispose(disposing);
         }

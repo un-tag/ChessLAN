@@ -111,6 +111,26 @@ namespace ChessLAN
 
         private List<string> _positionHistory = new();
 
+        private (int Row, int Col) _whiteKingPos = (-1, -1);
+        private (int Row, int Col) _blackKingPos = (-1, -1);
+
+        private struct UndoState
+        {
+            public Piece FromPiece;
+            public Piece ToPiece;
+            public Piece CapturedEnPassantPiece;
+            public int CapturedEnPassantRow;
+            public int CapturedEnPassantCol;
+            public bool WasEnPassant;
+            public bool WasCastle;
+            public int RookFromCol;
+            public int RookToCol;
+            public Piece RookPiece;
+            public (int Row, int Col)? PrevEnPassantTarget;
+            public (int Row, int Col) PrevWhiteKingPos;
+            public (int Row, int Col) PrevBlackKingPos;
+        }
+
         public ChessBoard()
         {
             for (int r = 0; r < 8; r++)
@@ -147,6 +167,8 @@ namespace ChessLAN
             EnPassantTarget = null;
             HalfmoveClock = 0;
             FullmoveNumber = 1;
+            _whiteKingPos = (0, 4);
+            _blackKingPos = (7, 4);
             _positionHistory.Clear();
             _positionHistory.Add(GetPositionKey());
         }
@@ -416,11 +438,28 @@ namespace ChessLAN
 
         private (int Row, int Col) FindKing(PieceColor color)
         {
+            if (color == PieceColor.White && _whiteKingPos.Row >= 0)
+                return _whiteKingPos;
+            if (color == PieceColor.Black && _blackKingPos.Row >= 0)
+                return _blackKingPos;
+
             for (int r = 0; r < 8; r++)
                 for (int c = 0; c < 8; c++)
                     if (_squares[r, c].Type == PieceType.King && _squares[r, c].Color == color)
+                    {
+                        if (color == PieceColor.White) _whiteKingPos = (r, c);
+                        else _blackKingPos = (r, c);
                         return (r, c);
-            return (-1, -1); // should never happen in a valid position
+                    }
+            return (-1, -1);
+        }
+
+        private void UpdateKingCache(PieceColor color, int row, int col)
+        {
+            if (color == PieceColor.White)
+                _whiteKingPos = (row, col);
+            else
+                _blackKingPos = (row, col);
         }
 
         // ────────────────────────────────────────────────
@@ -455,45 +494,52 @@ namespace ChessLAN
             return legal;
         }
 
-        /// <summary>
-        /// Checks if executing the move leaves the mover's king safe.
-        /// Uses a temporary clone to validate.
-        /// </summary>
         private bool IsMoveLegal(Move move)
         {
-            // Make the move on a clone, then check if our king is in check
-            ChessBoard copy = Clone();
-            copy.ApplyMoveRaw(move);
-            PieceColor mover = Turn; // the side that is making the move
-            var king = copy.FindKing(mover);
-            if (king.Row < 0) return false; // no king found – invalid
-            return !copy.IsSquareAttacked(king.Row, king.Col, Opposite(mover));
+            PieceColor mover = Turn;
+            var undo = ApplyMoveRaw(move);
+            var king = FindKing(mover);
+            bool legal = king.Row >= 0 && !IsSquareAttacked(king.Row, king.Col, Opposite(mover));
+            UndoMoveRaw(move, undo);
+            return legal;
         }
 
-        /// <summary>
-        /// Applies a move without legality checks and without updating game-state metadata
-        /// beyond piece placement. Used internally for legality testing.
-        /// </summary>
-        private void ApplyMoveRaw(Move move)
+        private UndoState ApplyMoveRaw(Move move)
         {
             Piece piece = _squares[move.FromRow, move.FromCol];
+
+            var undo = new UndoState
+            {
+                FromPiece = piece,
+                ToPiece = _squares[move.ToRow, move.ToCol],
+                PrevEnPassantTarget = EnPassantTarget,
+                PrevWhiteKingPos = _whiteKingPos,
+                PrevBlackKingPos = _blackKingPos,
+                WasEnPassant = false,
+                WasCastle = false,
+            };
 
             // En passant capture
             if (piece.Type == PieceType.Pawn && EnPassantTarget.HasValue
                 && move.ToRow == EnPassantTarget.Value.Row && move.ToCol == EnPassantTarget.Value.Col)
             {
                 int capturedPawnRow = piece.Color == PieceColor.White ? move.ToRow - 1 : move.ToRow + 1;
+                undo.WasEnPassant = true;
+                undo.CapturedEnPassantPiece = _squares[capturedPawnRow, move.ToCol];
+                undo.CapturedEnPassantRow = capturedPawnRow;
+                undo.CapturedEnPassantCol = move.ToCol;
                 _squares[capturedPawnRow, move.ToCol] = Piece.Empty;
             }
 
             // Castling rook movement
             if (piece.Type == PieceType.King && Math.Abs(move.ToCol - move.FromCol) == 2)
             {
-                int rookFromCol, rookToCol;
-                if (move.ToCol > move.FromCol) { rookFromCol = 7; rookToCol = 5; } // kingside
-                else { rookFromCol = 0; rookToCol = 3; } // queenside
-                _squares[move.FromRow, rookToCol] = _squares[move.FromRow, rookFromCol];
-                _squares[move.FromRow, rookFromCol] = Piece.Empty;
+                undo.WasCastle = true;
+                if (move.ToCol > move.FromCol) { undo.RookFromCol = 7; undo.RookToCol = 5; }
+                else { undo.RookFromCol = 0; undo.RookToCol = 3; }
+                undo.RookPiece = _squares[move.FromRow, undo.RookFromCol];
+                _squares[move.FromRow, undo.RookToCol] = _squares[move.FromRow, undo.RookFromCol];
+                _squares[move.FromRow, undo.RookFromCol] = Piece.Empty;
             }
 
             // Move the piece
@@ -503,6 +549,35 @@ namespace ChessLAN
             // Promotion
             if (move.Promotion != PieceType.None)
                 _squares[move.ToRow, move.ToCol] = new Piece { Type = move.Promotion, Color = piece.Color };
+
+            // Update king cache
+            if (piece.Type == PieceType.King)
+                UpdateKingCache(piece.Color, move.ToRow, move.ToCol);
+
+            return undo;
+        }
+
+        private void UndoMoveRaw(Move move, UndoState undo)
+        {
+            // Restore moved piece
+            _squares[move.FromRow, move.FromCol] = undo.FromPiece;
+            _squares[move.ToRow, move.ToCol] = undo.ToPiece;
+
+            // Undo en passant capture
+            if (undo.WasEnPassant)
+                _squares[undo.CapturedEnPassantRow, undo.CapturedEnPassantCol] = undo.CapturedEnPassantPiece;
+
+            // Undo castling rook movement
+            if (undo.WasCastle)
+            {
+                _squares[move.FromRow, undo.RookFromCol] = undo.RookPiece;
+                _squares[move.FromRow, undo.RookToCol] = Piece.Empty;
+            }
+
+            // Restore state
+            EnPassantTarget = undo.PrevEnPassantTarget;
+            _whiteKingPos = undo.PrevWhiteKingPos;
+            _blackKingPos = undo.PrevBlackKingPos;
         }
 
         // ────────────────────────────────────────────────
@@ -555,6 +630,10 @@ namespace ChessLAN
             // Promotion
             if (isPromotion)
                 _squares[move.ToRow, move.ToCol] = new Piece { Type = move.Promotion, Color = movingPiece.Color };
+
+            // Update king cache
+            if (movingPiece.Type == PieceType.King)
+                UpdateKingCache(movingPiece.Color, move.ToRow, move.ToCol);
 
             // ── Update castling rights ──
 
@@ -621,18 +700,23 @@ namespace ChessLAN
             result.IsPromotion = isPromotion;
 
             PieceColor opponent = Turn; // after switching, Turn is the opponent
-            result.IsCheck = IsInCheck(opponent);
+            bool inCheck = IsInCheck(opponent);
+            result.IsCheck = inCheck;
 
-            if (IsCheckmate())
+            var legalMoves = GetLegalMoves();
+            if (legalMoves.Count == 0)
             {
-                result.IsCheckmate = true;
-                result.GameOverReason = (Opposite(opponent)).ToString() + " wins by checkmate";
-            }
-            else if (IsStalemate())
-            {
-                result.IsStalemate = true;
-                result.IsDraw = true;
-                result.GameOverReason = "Draw by stalemate";
+                if (inCheck)
+                {
+                    result.IsCheckmate = true;
+                    result.GameOverReason = (Opposite(opponent)).ToString() + " wins by checkmate";
+                }
+                else
+                {
+                    result.IsStalemate = true;
+                    result.IsDraw = true;
+                    result.GameOverReason = "Draw by stalemate";
+                }
             }
             else if (IsInsufficientMaterial())
             {
@@ -781,6 +865,8 @@ namespace ChessLAN
             copy.EnPassantTarget = EnPassantTarget;
             copy.HalfmoveClock = HalfmoveClock;
             copy.FullmoveNumber = FullmoveNumber;
+            copy._whiteKingPos = _whiteKingPos;
+            copy._blackKingPos = _blackKingPos;
             copy._positionHistory = new List<string>(_positionHistory);
             return copy;
         }

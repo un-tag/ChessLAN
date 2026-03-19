@@ -430,77 +430,78 @@ namespace ChessLAN
 
             var move = ChessLAN.Move.FromAlgebraic(msg.Move);
 
-            // Pre-determine sound type before animation (check if it's a capture)
-            bool isCapture = !_board.GetPiece(move.ToRow, move.ToCol).IsEmpty;
-            // Also check en passant capture
-            if (!isCapture && _board.GetPiece(move.FromRow, move.FromCol).Type == PieceType.Pawn
-                && move.FromCol != move.ToCol)
-                isCapture = true;
-
-            // Apply move FIRST to know if it's check, then animate visually
+            // Apply move to board immediately
             var result = _board.MakeMove(move);
 
-            // Play sound IMMEDIATELY (not after animation)
+            // Play sound immediately
             PlayMoveSound(result);
 
-            // Animate the move visually
-            _boardControl.AnimateMove(move, () =>
+            // Track captures immediately
+            if (result.IsCapture && !result.CapturedPiece.IsEmpty)
             {
-                // Track captures
-                if (result.IsCapture && !result.CapturedPiece.IsEmpty)
+                _capturedByOpponent.Add(result.CapturedPiece);
+                UpdateCapturedDisplay();
+            }
+
+            // Sync clock immediately
+            _clock.SetTimes(
+                TimeSpan.FromMilliseconds(msg.WhiteTimeMs),
+                TimeSpan.FromMilliseconds(msg.BlackTimeMs)
+            );
+            _clock.SwitchTo(_myColor);
+
+            // Check game over immediately
+            if (result.IsCheckmate || result.IsDraw || result.IsStalemate)
+            {
+                HandleGameOver(result.GameOverReason ?? "Game Over");
+                // Still animate for visual polish, callback just refreshes display
+                _boardControl.AnimateMove(move, () =>
                 {
-                    _capturedByOpponent.Add(result.CapturedPiece);
-                    UpdateCapturedDisplay();
-                }
+                    _boardControl.SetLastMove(move);
+                    _boardControl.Board = _board;
+                    _boardControl.Invalidate();
+                }, GetAnimationDuration());
+                return;
+            }
 
-                _boardControl.SetLastMove(move);
-                _boardControl.Board = _board;
-                _boardControl.Invalidate();
+            // It's now my turn — update immediately so premoves fire without delay
+            _boardControl.IsMyTurn = true;
+            UpdateStatus();
 
-                // Sync clock
-                _clock.SetTimes(
-                    TimeSpan.FromMilliseconds(msg.WhiteTimeMs),
-                    TimeSpan.FromMilliseconds(msg.BlackTimeMs)
-                );
-                _clock.SwitchTo(_myColor);
-
-                // Check game over
-                if (result.IsCheckmate || result.IsDraw || result.IsStalemate)
+            // Execute premove immediately (before animation starts)
+            var premove = _boardControl.GetAndClearPremove();
+            if (premove.HasValue)
+            {
+                var legalMoves = _board.GetLegalMoves();
+                if (legalMoves.Any(m =>
+                    m.FromRow == premove.Value.FromRow && m.FromCol == premove.Value.FromCol &&
+                    m.ToRow == premove.Value.ToRow && m.ToCol == premove.Value.ToCol))
                 {
-                    HandleGameOver(result.GameOverReason ?? "Game Over");
-                    return;
-                }
-
-                // It's now my turn
-                _boardControl.IsMyTurn = true;
-                UpdateStatus();
-
-                // Check for premove
-                var premove = _boardControl.GetAndClearPremove();
-                if (premove.HasValue)
-                {
-                    // Verify the premove is still legal
-                    var legalMoves = _board.GetLegalMoves();
-                    var matchingLegal = legalMoves.FirstOrDefault(m =>
+                    var exactMove = legalMoves.First(m =>
                         m.FromRow == premove.Value.FromRow && m.FromCol == premove.Value.FromCol &&
                         m.ToRow == premove.Value.ToRow && m.ToCol == premove.Value.ToCol &&
                         (premove.Value.Promotion == PieceType.None || m.Promotion == premove.Value.Promotion));
 
-                    if (legalMoves.Any(m =>
-                        m.FromRow == premove.Value.FromRow && m.FromCol == premove.Value.FromCol &&
-                        m.ToRow == premove.Value.ToRow && m.ToCol == premove.Value.ToCol))
-                    {
-                        // Find the exact legal move (with correct promotion if needed)
-                        var exactMove = legalMoves.First(m =>
-                            m.FromRow == premove.Value.FromRow && m.FromCol == premove.Value.FromCol &&
-                            m.ToRow == premove.Value.ToRow && m.ToCol == premove.Value.ToCol &&
-                            (premove.Value.Promotion == PieceType.None || m.Promotion == premove.Value.Promotion));
-
-                        // Execute premove
-                        OnMoveMade(exactMove);
-                    }
+                    OnMoveMade(exactMove);
                 }
-            });
+            }
+
+            // Start animation purely for visual effect — callback only updates display
+            _boardControl.AnimateMove(move, () =>
+            {
+                _boardControl.SetLastMove(move);
+                _boardControl.Board = _board;
+                _boardControl.Invalidate();
+            }, GetAnimationDuration());
+        }
+
+        private int GetAnimationDuration()
+        {
+            var (initialTime, _) = ParseTimeControl(_timeControl);
+            double totalMinutes = initialTime.TotalMinutes;
+            if (totalMinutes <= 2) return 80;   // Bullet
+            if (totalMinutes <= 5) return 120;  // Blitz
+            return 150;                          // Rapid / Classical
         }
 
         private void OnResignReceived()
