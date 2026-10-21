@@ -4,8 +4,16 @@ import { Toggle } from "../components/common";
 import { connection } from "../net/connection";
 import { isDesktop, platform } from "../platform";
 import { sounds } from "../sound";
-import { set, setPrefs, useStore } from "../state/store";
+import { set, setPrefs, useStore, type Prefs } from "../state/store";
 import { voice } from "../voice";
+
+const PROMOTION_CHOICES: [Prefs["promotion"], string][] = [
+  ["q", "♕ Queen"],
+  ["n", "♘ Knight"],
+  ["r", "♖ Rook"],
+  ["b", "♗ Bishop"],
+  ["ask", "Ask"],
+];
 
 export function Settings() {
   const config = useStore((s) => s.config);
@@ -46,7 +54,25 @@ export function Settings() {
         <h3>Board</h3>
         <Toggle label="Show legal moves" checked={prefs.showLegalMoves} onChange={(v) => setPrefs({ showLegalMoves: v })} />
         <Toggle label="Premoves" hint="Queue moves during your opponent's turn" checked={prefs.premoves} onChange={(v) => setPrefs({ premoves: v })} />
-        <Toggle label="Always promote to queen" checked={prefs.autoQueen} onChange={(v) => setPrefs({ autoQueen: v })} />
+        <div className="field-row">
+          <span>
+            Promote pawns to
+            <span className="hint">“Ask” shows a picker each time; premoves use your default or a queen</span>
+          </span>
+          <div className="segmented" role="radiogroup" aria-label="Promotion">
+            {PROMOTION_CHOICES.map(([value, label]) => (
+              <button
+                key={value}
+                role="radio"
+                aria-checked={prefs.promotion === value}
+                className={prefs.promotion === value ? "selected" : ""}
+                onClick={() => setPrefs({ promotion: value })}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         <Toggle label="Coordinates" checked={prefs.coordinates} onChange={(v) => setPrefs({ coordinates: v })} />
         <Toggle label="Piece animation" checked={prefs.animations} onChange={(v) => setPrefs({ animations: v })} />
       </section>

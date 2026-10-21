@@ -164,7 +164,7 @@ export function BotScreen({ botId, tc, color }: { botId: string; tc: TimeControl
     if (!next) return;
     if (game.legalDests().get(next.from)?.includes(next.to)) {
       setPremoves(rest);
-      playMine(next.from, next.to, next.promotion ?? "q");
+      playMine(next.from, next.to, game.isPromotion(next.from, next.to) ? (next.promotion ?? "q") : undefined);
     } else {
       setPremoves([]);
     }
@@ -297,7 +297,7 @@ export function BotScreen({ botId, tc, color }: { botId: string; tc: TimeControl
             }}
             showLegalMoves={prefs.showLegalMoves}
             showCoordinates={prefs.coordinates}
-            autoQueen={prefs.autoQueen}
+            autoPromote={prefs.promotion === "ask" ? null : prefs.promotion}
             animationMs={prefs.animations ? animationMsFor(tc) : 0}
           />
           {over && (

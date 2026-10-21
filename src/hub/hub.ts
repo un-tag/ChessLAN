@@ -354,9 +354,11 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     log(`${name} connected${conn.local ? " (local)" : ""}`);
   };
 
+  let closing = false;
+
   const onClose = (conn: Conn): void => {
     const p = conn.player;
-    if (!p || conns.get(p.id) !== conn) return;
+    if (closing || !p || conns.get(p.id) !== conn) return;
     conns.delete(p.id);
     for (const ch of [...challenges.values()]) if (ch.from.id === p.id) removeChallenge(ch.id);
     activeSessionOf(p.id)?.playerLeft(p.id);
@@ -456,11 +458,15 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     hubId: store.meta.hubId,
     store,
     close: async () => {
+      closing = true;
       for (const s of sessions.values()) s.dispose();
       for (const t of challengeTimers.values()) clock.clearTimeout(t);
       for (const c of wss.clients) c.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+      // Idle keep-alive HTTP connections would otherwise hold close() open.
+      server.closeAllConnections();
+      await closed;
     },
   };
 }

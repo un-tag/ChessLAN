@@ -190,6 +190,16 @@ describe("GameSession disconnects", () => {
     expect(last().clock?.w).toBe(600_000 - 30_000);
   });
 
+  it("never re-arms timers after dispose", () => {
+    const s = session({ initialMs: 600_000, incrementMs: 0 });
+    play(s, ["e2e4", "e7e5"]);
+    s.dispose();
+    s.playerLeft(B.id);
+    clock.advance(10 * 60_000);
+    expect(s.over).toBe(false);
+    expect(finished).toBe(0);
+  });
+
   it("aborts instead when nobody has moved twice", () => {
     const s = session();
     play(s, ["e2e4"]);

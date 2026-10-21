@@ -14,7 +14,8 @@ export interface Prefs {
   sound: boolean;
   volume: number; // 0..1
   showLegalMoves: boolean;
-  autoQueen: boolean;
+  /** Piece to promote to without asking, or "ask" to pick every time. */
+  promotion: "q" | "r" | "b" | "n" | "ask";
   premoves: boolean;
   coordinates: boolean;
   animations: boolean;
@@ -25,7 +26,7 @@ const DEFAULT_PREFS: Prefs = {
   sound: true,
   volume: 0.8,
   showLegalMoves: true,
-  autoQueen: false,
+  promotion: "q",
   premoves: true,
   coordinates: true,
   animations: true,

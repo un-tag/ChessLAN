@@ -131,7 +131,7 @@ function Demo() {
           onMove={onMove}
           showLegalMoves={showLegalMoves}
           showCoordinates={showCoordinates}
-          autoQueen={autoQueen}
+          autoPromote={autoQueen ? "q" : null}
           animationMs={animationMs}
           arrows={controlledArrows ? DEMO_ARROWS : undefined}
         />

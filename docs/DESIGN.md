@@ -164,8 +164,11 @@ headless Chromium.
 - **Animation:** ease-out movement, never delaying game logic. It's 100 ms
   for bullet, 150 ms for blitz and 200 ms for rapid or untimed. About 100 ms
   is the shortest that still shows where a piece went.
-- **Promotion:** a chess.com-style picker on the board, or auto-queen if
-  that setting is on.
+- **Promotion:** promotes to a queen automatically by default. Settings
+  can change the default piece (queen, knight, rook or bishop) or choose
+  "Ask", which shows a chess.com-style picker on the board every time.
+  Premoved promotions use the default piece, or a queen in "Ask" mode,
+  because a picker can't outlive the position it was opened in.
 - **Sounds:** synthesized at startup from a physical model, with no sample
   files. A piece landing is a sharp contact click plus a few short, damped,
   inharmonic wood resonances (about 200 Hz–3 kHz); a capture is a brighter

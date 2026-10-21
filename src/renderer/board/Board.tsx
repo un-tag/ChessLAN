@@ -63,7 +63,7 @@ export interface BoardProps {
   onMove?: (from: string, to: string, promotion?: Promotion) => void; // only for moves in `dests`
   showLegalMoves: boolean; // dots / capture rings
   showCoordinates: boolean;
-  autoQueen: boolean; // skip the promotion picker
+  autoPromote: Promotion | null; // promote straight to this piece; null = always show the picker
   animationMs: number; // 0 disables animation
   arrows?: Arrow[]; // controlled arrows (e.g. replays); otherwise user-drawn ones
 }
@@ -147,7 +147,7 @@ export function Board(props: BoardProps) {
     onMove,
     showLegalMoves,
     showCoordinates,
-    autoQueen,
+    autoPromote,
     animationMs,
     arrows,
   } = props;
@@ -295,12 +295,12 @@ export function Board(props: BoardProps) {
       if (!(dests.get(from) ?? []).includes(to)) return false;
       const piece = base[sqIndex(from)];
       const promotes = piece?.[1] === "P" && (to[1] === "8" || to[1] === "1");
-      if (promotes && !autoQueen) {
+      if (promotes && !autoPromote) {
         setPromo({ fen, from, to, color: piece[0] as Side });
         setSelected(null);
         return true;
       }
-      commitMove(from, to, promotes ? "q" : undefined, dragged);
+      commitMove(from, to, promotes ? (autoPromote ?? "q") : undefined, dragged);
       return true;
     }
     if (premoveMode) {
@@ -310,7 +310,8 @@ export function Board(props: BoardProps) {
       const promotes = piece[1] === "P" && to[1] === (piece[0] === "w" ? "8" : "1");
       noteAction(from, to, dragged);
       setSelected(null);
-      onPremovesChange?.([...premoves, promotes ? { from, to, promotion: "q" } : { from, to }]);
+      // The picker can't outlive the position, so premoves use the default piece.
+      onPremovesChange?.([...premoves, promotes ? { from, to, promotion: autoPromote ?? "q" } : { from, to }]);
       return true;
     }
     return false;

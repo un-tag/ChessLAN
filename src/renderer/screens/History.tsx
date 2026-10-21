@@ -165,7 +165,7 @@ export function Replay({ id }: { id: string }) {
             premoveEnabled={false}
             showLegalMoves={false}
             showCoordinates={useStore.getState().prefs.coordinates}
-            autoQueen
+            autoPromote="q"
             animationMs={150}
           />
         </div>

@@ -1137,7 +1137,16 @@ h4 {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
   padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.field-row .hint {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .settings .card p {

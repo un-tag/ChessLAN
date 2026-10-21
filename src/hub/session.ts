@@ -59,6 +59,7 @@ export class GameSession {
   private gone: Partial<Record<Side, number>> = {};
   private flagTimer: unknown = null;
   private abandonTimer: unknown = null;
+  private disposed = false;
 
   constructor(private opts: SessionOptions) {
     this.id = opts.id;
@@ -175,7 +176,7 @@ export class GameSession {
   }
 
   private scheduleFlag(): void {
-    if (!this.running) return;
+    if (!this.running || this.disposed) return;
     const side = this.running;
     const grace = this.opts.flagGraceMs?.(side) ?? 150;
     this.flagTimer = this.opts.clock.setTimeout(() => this.checkFlag(side, grace), this.remaining[side] + grace);
@@ -320,6 +321,7 @@ export class GameSession {
   private scheduleAbandon(): void {
     if (this.abandonTimer !== null) this.opts.clock.clearTimeout(this.abandonTimer);
     this.abandonTimer = null;
+    if (this.disposed) return;
     const first = (["w", "b"] as Side[])
       .filter((s) => this.gone[s] !== undefined)
       .sort((a, b) => this.gone[a]! - this.gone[b]!)[0];
@@ -353,7 +355,9 @@ export class GameSession {
     this.changed();
   }
 
+  /** Stops all timers for good (hub shutting down or pruning old games). */
   dispose(): void {
+    this.disposed = true;
     this.clearFlagTimer();
     if (this.abandonTimer !== null) this.opts.clock.clearTimeout(this.abandonTimer);
   }

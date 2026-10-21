@@ -187,6 +187,9 @@ function handle(msg: ServerMessage): void {
     case "game": {
       const g = msg.game;
       if (g.white.id !== myId() && g.black.id !== myId()) return;
+      // A finished game never replaces a different live one (e.g. the old
+      // game's "rematch started" update arriving after the new game).
+      if (s.game && s.game.id !== g.id && !s.game.over && g.over) return;
       const isNew = s.game?.id !== g.id;
       if (isNew && !g.over) {
         // A new game (accepted challenge or rematch) always takes over the screen.

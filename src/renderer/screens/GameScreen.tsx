@@ -52,14 +52,18 @@ function LiveGame({ view }: { view: GameView }) {
   const [confirmResign, setConfirmResign] = useState(false);
   const turnStart = useRef(performance.now());
   const frozenAt = useRef<number | null>(null);
+  // Our move that the hub hasn't confirmed yet (shown optimistically).
+  const pending = useRef<string | null>(null);
 
   const sendMove = useCallback(
     (info: MoveInfo, thinkMs: number) => {
       frozenAt.current = serverNow();
+      pending.current = info.uci;
       const sent = connection.send({ type: "move", gameId: view.id, uci: info.uci, ply: game.moves.length - 1, thinkMs: Math.round(thinkMs) });
       if (!sent) {
         game.undo();
         frozenAt.current = null;
+        pending.current = null;
         rerender();
       }
     },
@@ -86,7 +90,8 @@ function LiveGame({ view }: { view: GameView }) {
     const [next, ...rest] = queue;
     const dests = game.legalDests().get(next.from);
     if (dests?.includes(next.to)) {
-      playMine(next.from, next.to, next.promotion ?? "q", 0);
+      const promotion = game.isPromotion(next.from, next.to) ? (next.promotion ?? "q") : undefined;
+      playMine(next.from, next.to, promotion, 0);
       setPremoves(rest);
     } else {
       setPremoves([]);
@@ -99,7 +104,12 @@ function LiveGame({ view }: { view: GameView }) {
     const local = game.uciMoves;
     frozenAt.current = null;
     const isPrefix = (a: string[], b: string[]) => a.length <= b.length && a.every((m, i) => m === b[i]);
-    if (isPrefix(local, hub)) {
+    const waitingForEcho =
+      pending.current !== null && local.length === hub.length + 1 && local[local.length - 1] === pending.current && isPrefix(hub, local);
+    if (waitingForEcho) {
+      // Our move is still on its way to the hub; keep showing it.
+    } else if (isPrefix(local, hub)) {
+      pending.current = null;
       const fresh = hub.slice(local.length);
       for (const uci of fresh) {
         const info = game.move(uci);
@@ -112,8 +122,9 @@ function LiveGame({ view }: { view: GameView }) {
         setViewPly(null);
         tryPremove();
       }
-    } else if (!isPrefix(hub, local)) {
+    } else {
       // Diverged (takeback or a rejected move): adopt the hub's version.
+      pending.current = null;
       gameRef.current = Game.fromUci(hub);
       turnStart.current = performance.now();
       setPremoves([]);
@@ -121,6 +132,15 @@ function LiveGame({ view }: { view: GameView }) {
     }
     rerender();
   }, [view, game, mySide, tryPremove]);
+
+  // The hub rejected something: stop waiting for our move's echo.
+  useEffect(
+    () =>
+      connection.on((msg) => {
+        if (msg.type === "error") pending.current = null;
+      }),
+    [],
+  );
 
   // Game over: sound once, tell main (updates wait until no game is on).
   const wasOver = useRef(view.over);
@@ -238,7 +258,7 @@ function LiveGame({ view }: { view: GameView }) {
             }}
             showLegalMoves={prefs.showLegalMoves}
             showCoordinates={prefs.coordinates}
-            autoQueen={prefs.autoQueen}
+            autoPromote={prefs.promotion === "ask" ? null : prefs.promotion}
             animationMs={prefs.animations ? animationMsFor(view.tc) : 0}
           />
           {view.over && <GameOver view={view} mySide={mySide} oppName={oppName} />}
