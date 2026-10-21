@@ -1,4 +1,4 @@
-# Push a tag like v2.0.1 (matching package.json) to build the Mac and
+# Push a tag like v3.0.1 (matching package.json) to build the Mac and
 # Windows apps and publish them as a GitHub Release. The release stays a
 # draft until both builds have uploaded, so the host Mac never sees a
 # "latest" release without its files. The Mac then picks it up by itself and

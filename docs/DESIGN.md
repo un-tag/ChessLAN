@@ -2,7 +2,7 @@
 
 This is the living design document for ChessLAN. It describes the current,
 agreed design (not a history of how we got here). The previous WinForms
-implementation lives in git history before the v2 rewrite. It is not a
+implementation lives in git history before the v3 rewrite. It is not a
 reference: everything here is designed from the goals below. The only
 things kept are the ones you chose explicitly (the look).
 

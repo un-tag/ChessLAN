@@ -113,7 +113,7 @@ The design and the decisions behind it are in
 [docs/DESIGN.md](docs/DESIGN.md).
 
 **Releasing:** bump `version` in `package.json`, commit, then tag and push
-(`git tag v2.0.1 && git push --tags`). GitHub Actions builds the Mac and
+(`git tag v3.0.1 && git push --tags`). GitHub Actions builds the Mac and
 Windows apps and publishes the release; the Mac picks it up by itself.
 
 ## Credits
