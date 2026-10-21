@@ -1,7 +1,7 @@
 {
   "name": "chesslan",
   "productName": "ChessLAN",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Offline LAN chess for two: clocks, premoves, chat, voice, history, ratings and bots.",
   "private": true,
   "main": "out/main/main.js",

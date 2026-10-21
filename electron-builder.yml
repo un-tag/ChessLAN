@@ -14,7 +14,9 @@ mac:
       arch: arm64
     - target: dmg
       arch: arm64
-  category: public.app-category.board-games
+  # Deliberately no app category: a games category makes macOS treat
+  # ChessLAN as a game (Game Mode, the Games app, Game Center).
+
   # Ad-hoc signature: required for Apple Silicon to launch the app at all.
   identity: "-"
   hardenedRuntime: false

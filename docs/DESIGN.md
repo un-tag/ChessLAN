@@ -261,6 +261,9 @@ headless Chromium.
   - The first launch needs right-click → Open, or
     `xattr -dr com.apple.quarantine`, as documented in the README.
   - Has an `NSMicrophoneUsageDescription`.
+  - Has no app category on purpose. A games category makes macOS hook the
+    app into its gaming features (Game Mode, the Games app, Game Center),
+    which we don't want.
 - **Windows:**
   - Per-user NSIS installer, so updates need no UAC.
   - On first install only, it runs `netsh advfirewall firewall add rule`
