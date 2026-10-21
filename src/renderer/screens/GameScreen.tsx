@@ -101,7 +101,6 @@ function LiveGame({ view }: { view: GameView }) {
   useEffect(() => {
     const hub = view.moves;
     const local = game.uciMoves;
-    frozenAt.current = null;
     const isPrefix = (a: string[], b: string[]) => a.length <= b.length && a.every((m, i) => m === b[i]);
     const waitingForEcho =
       pending.current !== null && local.length === hub.length + 1 && local[local.length - 1] === pending.current && isPrefix(hub, local);
@@ -109,6 +108,7 @@ function LiveGame({ view }: { view: GameView }) {
       // Our move is still on its way to the hub; keep showing it.
     } else if (isPrefix(local, hub)) {
       pending.current = null;
+      frozenAt.current = null;
       const fresh = hub.slice(local.length);
       for (const uci of fresh) {
         const info = game.move(uci);
@@ -124,6 +124,7 @@ function LiveGame({ view }: { view: GameView }) {
     } else {
       // Diverged (takeback or a rejected move): adopt the hub's version.
       pending.current = null;
+      frozenAt.current = null;
       gameRef.current = Game.fromUci(hub);
       turnStart.current = performance.now();
       setPremoves([]);
