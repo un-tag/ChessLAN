@@ -2,7 +2,9 @@
 
 This is the living design document for ChessLAN. It describes the current,
 agreed design (not a history of how we got here). The previous WinForms
-implementation lives in git history before the v2 rewrite.
+implementation lives in git history before the v2 rewrite. It is not a
+reference: everything here is designed from the goals below. The only
+things kept are the ones you chose explicitly (the look).
 
 ## Goal
 
@@ -159,14 +161,18 @@ headless Chromium.
   submitted the instant your turn begins. Right-click or Esc clears it.
 - **Annotations:** right-drag draws an arrow and right-click marks a square;
   a left click clears them.
-- **Animation:** ease-out movement. It's faster for bullet (80 ms), medium
-  for blitz (120 ms) and slowest for rapid (150 ms).
+- **Animation:** ease-out movement, never delaying game logic. It's 100 ms
+  for bullet, 150 ms for blitz and 200 ms for rapid or untimed. About 100 ms
+  is the shortest that still shows where a piece went.
 - **Promotion:** a chess.com-style picker on the board, or auto-queen if
   that setting is on.
-- **Sounds:** synthesized offline with WebAudio, no sample files. There are
-  sounds for move, capture, check, castle, promote, game start, game end,
-  low time, notification and illegal move. The opponent's move sound plays
-  the instant the move arrives.
+- **Sounds:** synthesized at startup from a physical model, with no sample
+  files. A piece landing is a sharp contact click plus a few short, damped,
+  inharmonic wood resonances (about 200 Hz–3 kHz); a capture is a brighter
+  "clack" plus a second impact. Chimes use small-bell partials. There are
+  sounds for move, capture, castle, check, promote, game start, game end,
+  low time, premove, chat, challenge and illegal move. The opponent's move
+  sound plays the instant the move arrives.
 - **Material:** captured pieces and a +N material difference are shown next
   to each player.
 

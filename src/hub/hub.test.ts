@@ -83,6 +83,10 @@ describe("hub", () => {
     expect(await res.json()).toMatchObject({ app: "chesslan", protocol: PROTOCOL, hubId: hub.hubId });
   });
 
+  it("fails cleanly when the port is taken", async () => {
+    await expect(startHub({ dataDir: dir, appVersion: "test", port: hub.port, host: "127.0.0.1" })).rejects.toThrow(/EADDRINUSE/);
+  });
+
   it("rejects a different protocol version", async () => {
     const c = new TestClient("x", "X");
     await new Promise((r) => c.ws.once("open", r));

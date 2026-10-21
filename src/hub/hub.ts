@@ -413,6 +413,9 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   });
 
   const wss = new WebSocketServer({ server, path: "/ws", maxPayload: 256 * 1024 });
+  // The WebSocket server re-emits HTTP server errors (e.g. port in use);
+  // those are reported through the listen promise below instead.
+  wss.on("error", () => {});
   wss.on("connection", (ws, req) => {
     const addr = req.socket.remoteAddress ?? "";
     const conn: Conn = {

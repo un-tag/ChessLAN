@@ -60,9 +60,10 @@ export function pgnTimeControl(tc: TimeControl | null): string {
   return tc ? `${Math.round(tc.initialMs / 1000)}+${Math.round(tc.incrementMs / 1000)}` : "-";
 }
 
+/** Long enough to see where the piece went (~100 ms), shorter when time is tight. */
 export function animationMsFor(tc: TimeControl | null): number {
   const c = categoryOf(tc);
-  return c === "bullet" ? 80 : c === "blitz" ? 120 : 150;
+  return c === "bullet" ? 100 : c === "blitz" ? 150 : 200;
 }
 
 export const categoryLabel = (c: Category): string => c[0].toUpperCase() + c.slice(1);
