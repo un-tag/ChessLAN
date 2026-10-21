@@ -236,8 +236,10 @@ headless Chromium.
 ## Updates
 
 - **Releases:** GitHub Actions builds the macOS arm64 app (zip + dmg) and the
-  Windows NSIS installer, and attaches them to a GitHub Release when a `v*`
-  tag is pushed.
+  Windows NSIS installer for the version in `package.json`. It's started
+  from Actions → Release → Run workflow, or by pushing a matching `v*` tag.
+  The release stays a draft until both uploads finish, and publishing it
+  creates the tag.
 - **Mac (host):**
   - When online, it checks GitHub Releases.
   - If there's a newer version, it downloads the zip and offers

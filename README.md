@@ -112,9 +112,11 @@ npm run hub        # standalone hub; open http://localhost:47800 in a browser
 The design and the decisions behind it are in
 [docs/DESIGN.md](docs/DESIGN.md).
 
-**Releasing:** bump `version` in `package.json`, commit, then tag and push
-(`git tag v3.0.1 && git push --tags`). GitHub Actions builds the Mac and
-Windows apps and publishes the release; the Mac picks it up by itself.
+**Releasing:** bump `version` in `package.json` and merge it, then on
+GitHub open **Actions → Release → Run workflow** (or push a matching tag,
+e.g. `git tag v3.0.1 && git push --tags`). It builds the Mac and Windows
+apps and publishes the release, creating the tag if needed; the Mac picks
+it up by itself.
 
 ## Credits
 

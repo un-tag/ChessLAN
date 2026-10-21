@@ -1,13 +1,16 @@
-# Push a tag like v3.0.1 (matching package.json) to build the Mac and
-# Windows apps and publish them as a GitHub Release. The release stays a
-# draft until both builds have uploaded, so the host Mac never sees a
-# "latest" release without its files. The Mac then picks it up by itself and
-# passes the Windows update to the other PC.
+# Builds the Mac and Windows apps and publishes them as a GitHub Release for
+# the version in package.json. Start it either way:
+# - Actions → Release → Run workflow (GitHub creates the tag on publish), or
+# - push a tag like v3.0.1 that matches package.json.
+# The release stays a draft until both builds have uploaded, so the host Mac
+# never sees a "latest" release without its files. The Mac then picks it up
+# by itself and passes the Windows update to the other PC.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,16 +18,28 @@ permissions:
 jobs:
   create-release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-      - name: Check the tag matches package.json
+      - name: Work out the tag from package.json
+        id: tag
         run: |
-          version=$(node -p "require('./package.json').version")
-          test "v$version" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME != v$version"; exit 1; }
+          tag="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "$tag" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match package.json ($tag)"; exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Create a draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "ChessLAN $GITHUB_REF_NAME" --generate-notes
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null | grep -q false; then
+            echo "$TAG is already published; bump the version in package.json first"; exit 1
+          fi
+          gh release view "$TAG" >/dev/null 2>&1 ||
+            gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "ChessLAN $TAG" --generate-notes
 
   build:
     needs: create-release
@@ -52,11 +67,13 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
   publish:
-    needs: build
+    needs: [create-release, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          TAG: ${{ needs.create-release.outputs.tag }}
+        # Publishing a draft creates its tag if it doesn't exist yet.
+        run: gh release edit "$TAG" --draft=false --latest
