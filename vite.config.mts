@@ -9,7 +9,15 @@ const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), 
 export default defineConfig({
   root: "src/renderer",
   base: "./",
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      // React Fast Refresh injects an inline script in dev; allow it there only.
+      name: "dev-csp",
+      apply: "serve",
+      transformIndexHtml: (html) => html.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'"),
+    },
+  ],
   define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   build: {
     outDir: "../../out/renderer",

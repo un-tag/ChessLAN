@@ -3,7 +3,11 @@ import { defineConfig } from "@playwright/test";
 // End-to-end tests: each test starts its own hub (serving the built UI from
 // out/renderer) and drives two browser "players" against it.
 export default defineConfig({
-  testDir: "tests/e2e",
+  projects: [
+    { name: "web", testDir: "tests/e2e" },
+    // The real Electron app; needs a display (xvfb-run on Linux).
+    { name: "electron", testDir: "tests/electron", fullyParallel: false },
+  ],
   timeout: 45_000,
   expect: { timeout: 8_000 },
   fullyParallel: true,

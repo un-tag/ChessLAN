@@ -68,7 +68,7 @@ export function Home() {
             {opp ? (
               <OpponentStatus opp={opp} />
             ) : (
-              <p className="muted">Waiting for your opponent's app to connect for the first time…</p>
+              <FirstConnectHint />
             )}
 
             {outgoing ? (
@@ -198,6 +198,25 @@ export function Home() {
       {advanced && <AdvancedModal onClose={() => setAdvanced(false)} />}
       {botPicker && <BotPicker onClose={() => setBotPicker(false)} />}
     </div>
+  );
+}
+
+function FirstConnectHint() {
+  const role = useStore((s) => s.config?.role);
+  const [addresses, setAddresses] = useState<string[]>([]);
+  useEffect(() => {
+    if (role === "host") void platform.getLocalAddresses().then(setAddresses);
+  }, [role]);
+  return (
+    <p className="muted">
+      Waiting for your opponent's app to connect for the first time…
+      {role === "host" && addresses.length > 0 && (
+        <>
+          {" "}
+          It finds this computer by itself; if it can't, enter <b>{addresses.join(", ")}</b> in its Settings.
+        </>
+      )}
+    </p>
   );
 }
 

@@ -22,11 +22,10 @@ import { reasonText, resultFor } from "./results";
 
 export function GameScreen() {
   const view = useStore((s) => s.game);
-  if (!view) {
-    navigate({ name: "home" });
-    return null;
-  }
-  return <LiveGame key={view.id} view={view} />;
+  useEffect(() => {
+    if (!view) navigate({ name: "home" });
+  }, [view]);
+  return view ? <LiveGame key={view.id} view={view} /> : null;
 }
 
 function LiveGame({ view }: { view: GameView }) {

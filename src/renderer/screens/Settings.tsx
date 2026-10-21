@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AppConfig, Role } from "../../shared/bridge";
 import { Toggle } from "../components/common";
 import { connection } from "../net/connection";
@@ -23,6 +23,10 @@ export function Settings() {
   const conn = useStore((s) => s.conn);
   const [name, setName] = useState(config?.player?.name ?? "");
   const [address, setAddress] = useState(config?.hubAddress ?? "");
+  const [myAddresses, setMyAddresses] = useState<string[]>([]);
+  useEffect(() => {
+    if (config?.role === "host") void platform.getLocalAddresses().then(setMyAddresses);
+  }, [config?.role]);
 
   const saveConfig = async (patch: Partial<AppConfig>, reconnect = false) => {
     const next = await platform.setConfig(patch);
@@ -136,9 +140,16 @@ export function Settings() {
               </button>
             </form>
           )}
-          <p className="muted small">
-            {conn === "connected" && hub ? `Connected to ${hub.hostName} (${hub.host})` : "Not connected"}
-          </p>
+          {config.role === "host" ? (
+            <p className="muted small">
+              The other computer finds this one by itself. If it ever can't, enter this address there:{" "}
+              <b>{myAddresses.join(", ") || "…"}</b>
+            </p>
+          ) : (
+            <p className="muted small">
+              {conn === "connected" && hub ? `Connected to ${hub.hostName} (${hub.host})` : "Not connected"}
+            </p>
+          )}
         </section>
       )}
 

@@ -14,12 +14,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run typecheck
       - run: npm test
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      # Ubuntu 24.04 blocks the unprivileged namespaces Chromium's sandbox uses.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: xvfb-run -a npx playwright test --project electron
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

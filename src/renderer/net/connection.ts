@@ -88,11 +88,18 @@ class Connection {
       handle(msg);
       for (const l of this.listeners) l(msg);
     };
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       if (this.ws !== ws) return;
       this.ws = null;
       this.stopPing();
       voice.reset();
+      if (e.code === 4000) {
+        // The hub replaced us with a newer connection for the same player
+        // (the app opened elsewhere). Reconnecting would just kick that one off.
+        set({ conn: "idle", players: [], challenges: [] });
+        toast("ChessLAN was opened somewhere else for this player", "error");
+        return;
+      }
       if (get().conn !== "mismatch") set({ conn: "searching", players: [], challenges: [] });
       this.retry();
     };

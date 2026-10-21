@@ -9,6 +9,7 @@ import {
   dialog,
   ipcMain,
   nativeImage,
+  powerSaveBlocker,
   session,
   shell,
   systemPreferences,
@@ -34,6 +35,7 @@ let quitting = false;
 let windowOpen = false;
 let hub: Hub | null = null;
 let hubStarting: Promise<Hub | null> | null = null;
+let sleepBlocker: number | null = null;
 
 const hostUpdater = new HostUpdater(sendUpdateStatus);
 const joinUpdater = new JoinUpdater(sendUpdateStatus);
@@ -259,7 +261,15 @@ function registerIpc(): void {
     n.on("click", () => showWindow());
     n.show();
   });
-  ipcMain.on(IPC.setInGame, (_e, inGame: boolean) => joinUpdater.setInGame(inGame));
+  ipcMain.on(IPC.setInGame, (_e, inGame: boolean) => {
+    joinUpdater.setInGame(inGame);
+    // Don't let the computer (and with it the hub) sleep mid-game; the display may.
+    if (inGame && sleepBlocker === null) sleepBlocker = powerSaveBlocker.start("prevent-app-suspension");
+    if (!inGame && sleepBlocker !== null) {
+      powerSaveBlocker.stop(sleepBlocker);
+      sleepBlocker = null;
+    }
+  });
   ipcMain.on(IPC.checkUpdates, () => {
     if (loadConfig().role === "host") void hostUpdater.check();
     else void joinUpdater.check();

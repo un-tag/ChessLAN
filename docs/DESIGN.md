@@ -147,6 +147,9 @@ headless Chromium.
     aborted instead.
 - **When the hub restarts:** an unfinished game is lost. The host is one of
   the two players, so this is acceptable.
+- **Sleep:** while a game is in progress the app keeps the computer awake
+  (`prevent-app-suspension`; the display may still sleep), so the hub
+  can't fall asleep mid-game.
 
 ### Board feel (current look kept)
 
@@ -276,7 +279,12 @@ headless Chromium.
   - Covers challenge and accept, moves, premoves, flagging, draws,
     takebacks, resign, rematch, chat, voice connection (fake media),
     reconnects, history and ratings.
-- **CI** runs both on Linux. Release builds run on macOS and Windows runners.
+- **Real app (Playwright + Electron, under xvfb):** launches the packaged
+  UI twice, as host and joiner, and checks discovery, a challenge played
+  across both windows, the bot's Web Worker loading from `file://`, and a
+  challenge popping a window back up from the tray.
+- **CI** runs all three on Linux. Release builds run on macOS and Windows
+  runners.
 
 ## Open questions
 

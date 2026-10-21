@@ -33,6 +33,11 @@ function askBot(req: Omit<BotRequest, "id">): { id: number; result: Promise<BotR
 const newId = (): string =>
   typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `bot-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+function Redirect() {
+  useEffect(() => navigate({ name: "home" }), []);
+  return null;
+}
+
 export function BotScreen({ botId, tc, color }: { botId: string; tc: TimeControl | null; color: ColorChoice }) {
   const bot = getBot(botId);
   const prefs = useStore((s) => s.prefs);
@@ -242,10 +247,7 @@ export function BotScreen({ botId, tc, color }: { botId: string; tc: TimeControl
     [viewPly, total, game, over],
   );
 
-  if (!bot) {
-    navigate({ name: "home" });
-    return null;
-  }
+  if (!bot) return <Redirect />;
   const live = shown === game;
   const myTurn = live && !over && game.turn === mySide;
   const last = shown.lastMove;
