@@ -5,6 +5,7 @@ directories:
   buildResources: build
 files:
   - out/**
+  - "!out/hub/**" # the standalone hub CLI is only for development and tests
   - resources/**
   - package.json
 mac:
