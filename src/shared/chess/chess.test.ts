@@ -36,6 +36,39 @@ describe("perft", () => {
   });
 });
 
+describe("Position edge cases", () => {
+  it("rejects positions without exactly one king per side", () => {
+    expect(() => Position.fromFen("8/8/8/8/8/8/8/4K3 w - - 0 1")).toThrow(/one king/);
+    expect(() => Position.fromFen("4k3/8/8/8/8/8/8/3KK3 w - - 0 1")).toThrow(/one king/);
+  });
+
+  it("ignores an en-passant square whose capture would be illegal", () => {
+    // dxe6 e.p. would clear both pawns off the fifth rank and expose the
+    // a5 king to the h5 rook, so it's illegal.
+    const pinned = Position.fromFen("4k3/8/8/K2Pp2r/8/8/8/8 w - e6 0 1");
+    const same = Position.fromFen("4k3/8/8/K2Pp2r/8/8/8/8 w - - 0 1");
+    expect([pinned.hashLo, pinned.hashHi]).toEqual([same.hashLo, same.hashHi]);
+    // Without the pin the capture is real and the positions differ.
+    const free = Position.fromFen("4k3/8/8/3Pp3/8/8/8/4K3 w - e6 0 1");
+    const freeNoEp = Position.fromFen("4k3/8/8/3Pp3/8/8/8/4K3 w - - 0 1");
+    expect(free.hashLo === freeNoEp.hashLo && free.hashHi === freeNoEp.hashHi).toBe(false);
+  });
+
+  it("grows its undo stack for very long games", () => {
+    const pos = Position.fromFen("4k3/8/8/8/8/8/8/R3K3 w - - 0 1");
+    // Shuffle a rook back and forth well past the initial capacity.
+    const moves: number[] = [];
+    for (let i = 0; i < 1500; i++) {
+      const m = pos.generateLegal().find((x) => pos.board[x & 0x7f] !== 0 && (x & 0x7f) !== pos.kings[pos.turn])
+        ?? pos.generateLegal()[0];
+      pos.makeMove(m);
+      moves.push(m);
+    }
+    for (let i = 0; i < moves.length; i++) pos.unmakeMove();
+    expect(pos.fen()).toBe("4k3/8/8/8/8/8/8/R3K3 w - - 0 1");
+  });
+});
+
 describe("Game", () => {
   it("plays SAN and UCI and reports SAN with suffixes", () => {
     const g = new Game();

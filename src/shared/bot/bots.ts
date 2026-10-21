@@ -118,7 +118,7 @@ export const LEVELS: readonly Level[] = [
   lvl(2,   400,  1,   400,    20_000, 150,  0.10,  0.28,     0,      0.3,  [700, 2400]),
   lvl(3,   550,  2,   500,    30_000, 110,  0.05,  0.22,     0,      0.12, [700, 2200]),
   lvl(4,   700,  2,   600,    30_000,  80,  0.02,  0.16,     0,      0.05, [650, 2200]),
-  lvl(5,   850,  3,   800,    60_000,  55,  0,     0.12,     1,      0,    [600, 2000]),
+  lvl(5,   850,  2,   800,    60_000,  55,  0,     0.12,     1,      0,    [600, 2000]),
   lvl(6,  1000,  3,  1000,   100_000,  40,  0,     0.08,     1,      0,    [600, 2000]),
   lvl(7,  1200,  4,  1200,   200_000,  25,  0,     0.05,     2,      0,    [500, 1800]),
   lvl(8,  1400,  5,  1500,   400_000,  14,  0,     0.03,     2,      0,    [500, 1600]),
@@ -165,7 +165,7 @@ export const PERSONALITIES: readonly BotConfig[] = [
     id: "pawnstorm-pete",
     name: "Pawnstorm Pete",
     description: "Never met a pawn he didn't want to push. Charge!",
-    rating: 500,
+    rating: 600,
     avatar: "🌪️",
     kind: "personality",
     level: LEVELS[2],
@@ -185,7 +185,7 @@ export const PERSONALITIES: readonly BotConfig[] = [
     id: "queenie",
     name: "Queenie",
     description: "Her queen is out by move two and she's not sorry.",
-    rating: 750,
+    rating: 800,
     avatar: "👑",
     kind: "personality",
     level: LEVELS[4],
@@ -276,13 +276,9 @@ function moveBias(pos: Position, m: number, style: BotStyle): number {
   return bias;
 }
 
+// Upper bound on the bias one move can collect.
 const maxBias = (s: BotStyle): number =>
-  Math.max(
-    (s.checkBias ?? 0) + (s.captureBias ?? 0) + (s.knightBias ?? 0),
-    s.pawnBias ?? 0,
-    s.queenBias ?? 0,
-    s.castleBias ?? 0,
-  );
+  (s.checkBias ?? 0) + (s.captureBias ?? 0) + (s.pawnBias ?? 0) + (s.queenBias ?? 0) + (s.knightBias ?? 0) + (s.castleBias ?? 0);
 
 const isNatural = (m: number): boolean => !movePromo(m) || movePromo(m) === QUEEN;
 

@@ -55,6 +55,10 @@ const KNIGHT_D = [33, 31, 18, 14, -33, -31, -18, -14];
 const BISHOP_D = [17, 15, -17, -15];
 const ROOK_D = [16, -16, 1, -1];
 const KING_D = [17, 15, -17, -15, 16, -16, 1, -1];
+const PAWN_CAPTURE_D = [
+  [15, 17],
+  [-15, -17],
+];
 
 // Castling-rights mask applied when a move touches a square.
 const CASTLE_MASK = new Uint8Array(128).fill(15);
@@ -88,7 +92,7 @@ const Z_TURN_HI = rand32();
 
 export const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
-const MAX_PLY = 2048;
+const INITIAL_PLIES = 512;
 
 export class Position {
   board = new Int8Array(128);
@@ -101,18 +105,18 @@ export class Position {
   hashLo = 0;
   hashHi = 0;
 
-  // Undo stack (parallel typed arrays, indexed by ply).
+  // Undo stack (parallel typed arrays, indexed by ply; grown on demand).
   ply = 0;
-  private uMove = new Int32Array(MAX_PLY);
-  private uCaptured = new Int8Array(MAX_PLY);
-  private uCastling = new Int8Array(MAX_PLY);
-  private uEp = new Int16Array(MAX_PLY);
-  private uHalf = new Int16Array(MAX_PLY);
-  private uHashLo = new Uint32Array(MAX_PLY);
-  private uHashHi = new Uint32Array(MAX_PLY);
+  private uMove = new Int32Array(INITIAL_PLIES);
+  private uCaptured = new Int8Array(INITIAL_PLIES);
+  private uCastling = new Int8Array(INITIAL_PLIES);
+  private uEp = new Int16Array(INITIAL_PLIES);
+  private uHalf = new Int16Array(INITIAL_PLIES);
+  private uHashLo = new Uint32Array(INITIAL_PLIES);
+  private uHashHi = new Uint32Array(INITIAL_PLIES);
   // Hash of the position before each ply plus the current one, for repetition.
-  private histLo = new Uint32Array(MAX_PLY + 1);
-  private histHi = new Uint32Array(MAX_PLY + 1);
+  private histLo = new Uint32Array(INITIAL_PLIES + 1);
+  private histHi = new Uint32Array(INITIAL_PLIES + 1);
 
   static fromFen(fen: string = START_FEN): Position {
     const p = new Position();
@@ -120,14 +124,30 @@ export class Position {
     return p;
   }
 
-  clone(): Position {
-    return Position.fromFen(this.fen());
+  /** Doubles the undo stack when the next ply wouldn't fit (very long games). */
+  private reserve(): void {
+    if (this.ply + 1 < this.uMove.length) return;
+    const grow = <T extends Int8Array | Int16Array | Int32Array | Uint32Array>(a: T): T => {
+      const b = new (a.constructor as new (n: number) => T)(a.length * 2);
+      b.set(a);
+      return b;
+    };
+    this.uMove = grow(this.uMove);
+    this.uCaptured = grow(this.uCaptured);
+    this.uCastling = grow(this.uCastling);
+    this.uEp = grow(this.uEp);
+    this.uHalf = grow(this.uHalf);
+    this.uHashLo = grow(this.uHashLo);
+    this.uHashHi = grow(this.uHashHi);
+    this.histLo = grow(this.histLo);
+    this.histHi = grow(this.histHi);
   }
 
   loadFen(fen: string): void {
     const parts = fen.trim().split(/\s+/);
     if (parts.length < 4) throw new Error(`Bad FEN: ${fen}`);
     this.board.fill(0);
+    const kingCount = [0, 0];
     const rows = parts[0].split("/");
     if (rows.length !== 8) throw new Error(`Bad FEN board: ${fen}`);
     for (let r = 0; r < 8; r++) {
@@ -142,10 +162,14 @@ export class Position {
         const color: Color = ch === ch.toLowerCase() ? BLACK : WHITE;
         const s = ((7 - r) << 4) | f;
         this.board[s] = makePiece(color, type);
-        if (type === KING) this.kings[color] = s;
+        if (type === KING) {
+          this.kings[color] = s;
+          kingCount[color]++;
+        }
         f++;
       }
     }
+    if (kingCount[WHITE] !== 1 || kingCount[BLACK] !== 1) throw new Error(`FEN needs one king per side: ${fen}`);
     this.turn = parts[1] === "b" ? BLACK : WHITE;
     this.castling = 0;
     if (parts[2].includes("K")) this.castling |= WK;
@@ -191,17 +215,29 @@ export class Position {
     } ${this.halfmove} ${this.fullmove}`;
   }
 
-  // The en-passant square only counts for hashing/repetition when a pawn of
-  // the side to move could actually capture there.
+  // The en-passant square only counts for hashing/repetition when the side
+  // to move can legally capture there (FIDE: otherwise the positions are the
+  // same). The capture is tried directly on the board, without makeMove.
   private epMatters(): boolean {
     if (this.ep < 0) return false;
-    const pawn = makePiece(this.turn, PAWN);
-    const from1 = this.turn === WHITE ? this.ep - 15 : this.ep + 15;
-    const from2 = this.turn === WHITE ? this.ep - 17 : this.ep + 17;
-    return (
-      (!(from1 & 0x88) && this.board[from1] === pawn) ||
-      (!(from2 & 0x88) && this.board[from2] === pawn)
-    );
+    const b = this.board;
+    const us = this.turn;
+    const pawn = makePiece(us, PAWN);
+    const victimSq = us === WHITE ? this.ep - 16 : this.ep + 16;
+    const victim = b[victimSq];
+    for (const d of PAWN_CAPTURE_D[us]) {
+      const from = this.ep - d;
+      if (from & 0x88 || b[from] !== pawn) continue;
+      b[from] = 0;
+      b[victimSq] = 0;
+      b[this.ep] = pawn;
+      const legal = !this.isAttacked(this.kings[us], (us ^ 1) as Color);
+      b[this.ep] = 0;
+      b[victimSq] = victim;
+      b[from] = pawn;
+      if (legal) return true;
+    }
+    return false;
   }
 
   private computeHash(): void {
@@ -307,7 +343,7 @@ export class Position {
             if (s >> 4 === startRank && !b[two]) out.push(encode(s, two, 0, F_DOUBLE));
           }
         }
-        for (const cd of us === WHITE ? [15, 17] : [-15, -17]) {
+        for (const cd of PAWN_CAPTURE_D[us]) {
           const t = s + cd;
           if (t & 0x88) continue;
           const target = b[t];
@@ -420,6 +456,7 @@ export class Position {
   // Plays a pseudo-legal move. Returns false (and restores the position) if
   // it would leave the mover's king in check.
   makeMove(m: number): boolean {
+    this.reserve();
     const b = this.board;
     const from = moveFrom(m);
     const to = moveTo(m);
@@ -541,6 +578,7 @@ export class Position {
 
   // Null move for search (side to move passes). Never call when in check.
   makeNullMove(): void {
+    this.reserve();
     const ply = this.ply;
     this.uMove[ply] = 0;
     this.uCaptured[ply] = 0;

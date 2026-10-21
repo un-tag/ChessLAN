@@ -16,6 +16,8 @@ export interface BotResponse {
   /** "" if there was no legal move or the request failed. */
   uci: string;
   scoreCp: number | null;
+  /** Moves to mate (positive: the bot mates), if scoreCp is a mate score. */
+  mate: number | null;
   depth: number;
   nodes: number;
   error?: string;
@@ -32,8 +34,8 @@ ctx.onmessage = (e) => {
     const bot = getBot(botId);
     if (!bot) throw new Error(`Unknown bot: ${botId}`);
     const r = chooseMove(fen, history, bot, { timeMs });
-    ctx.postMessage({ id, uci: r.uci, scoreCp: r.scoreCp, depth: r.depth, nodes: r.nodes });
+    ctx.postMessage({ id, uci: r.uci, scoreCp: r.scoreCp, mate: r.mate, depth: r.depth, nodes: r.nodes });
   } catch (err) {
-    ctx.postMessage({ id, uci: "", scoreCp: null, depth: 0, nodes: 0, error: String(err) });
+    ctx.postMessage({ id, uci: "", scoreCp: null, mate: null, depth: 0, nodes: 0, error: String(err) });
   }
 };
