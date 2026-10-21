@@ -1,0 +1,43 @@
+appId: com.untag.chesslan
+productName: ChessLAN
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**
+  - "!out/hub/**" # the standalone hub CLI is only for development and tests
+  - resources/**
+  - package.json
+mac:
+  target:
+    - target: zip
+      arch: arm64
+    - target: dmg
+      arch: arm64
+  category: public.app-category.board-games
+  # Ad-hoc signature: required for Apple Silicon to launch the app at all.
+  identity: "-"
+  hardenedRuntime: false
+  artifactName: ${productName}-${version}-${arch}-mac.${ext}
+  extendInfo:
+    NSMicrophoneUsageDescription: ChessLAN uses the microphone for voice chat with your opponent.
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+win:
+  target:
+    - target: nsis
+      arch: x64
+  artifactName: ${productName}-Setup-${version}.${ext}
+nsis:
+  # Per-user one-click install: updates never need admin.
+  oneClick: true
+  perMachine: false
+  runAfterFinish: true
+  createDesktopShortcut: always
+  deleteAppDataOnUninstall: false
+  include: build/installer.nsh
+publish:
+  provider: github
+  owner: un-tag
+  repo: ChessLAN
+  releaseType: release

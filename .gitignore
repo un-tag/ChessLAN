@@ -1,6 +1,8 @@
-bin/
-obj/
-publish/
-*.user
-*.exe
-chess_data.json
+node_modules/
+out/
+dist/
+test-results/
+playwright-report/
+*.log
+.DS_Store
+.hub-data/

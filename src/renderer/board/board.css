@@ -1,0 +1,248 @@
+/* Chessboard: chess.com green look. Everything is sized relative to the
+   board (percentages and container query units, 12.5cqw = one square), so
+   any size works and resizing costs nothing. */
+
+.cl-board {
+  --cl-light: #eeeed2;
+  --cl-dark: #769656;
+  --cl-highlight-light: #f6f669;
+  --cl-highlight-dark: #baca2b;
+  --cl-premove-light: rgba(100, 140, 255, 0.51);
+  --cl-premove-dark: rgba(70, 110, 230, 0.51);
+  --cl-mark: rgba(235, 97, 80, 0.8);
+  --cl-arrow: rgb(255, 170, 0);
+  --cl-arrow-opacity: 0.8;
+  --cl-hint: rgba(0, 0, 0, 0.14);
+  --cl-hover: rgba(255, 255, 255, 0.65);
+  --cl-radius: 3px;
+  --cl-piece-size: 100%;
+
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  container-type: inline-size;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.cl-board.cl-dragging,
+.cl-board.cl-dragging .cl-sq {
+  cursor: grabbing;
+}
+
+.cl-squares {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template: repeat(8, 1fr) / repeat(8, 1fr);
+  border-radius: var(--cl-radius);
+  overflow: hidden;
+}
+
+.cl-row {
+  display: contents;
+}
+
+.cl-sq {
+  position: relative;
+  background-color: var(--cl-light);
+}
+.cl-sq.cl-d {
+  background-color: var(--cl-dark);
+}
+.cl-sq.cl-hl {
+  background-color: var(--cl-highlight-light);
+}
+.cl-sq.cl-d.cl-hl {
+  background-color: var(--cl-highlight-dark);
+}
+.cl-sq.cl-grab {
+  cursor: grab;
+}
+
+/* Overlays painted on a square, under the pieces. */
+.cl-ov {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.cl-ov-pre {
+  background: var(--cl-premove-light);
+}
+.cl-d > .cl-ov-pre {
+  background: var(--cl-premove-dark);
+}
+.cl-ov-mark {
+  background: var(--cl-mark);
+}
+.cl-ov-check {
+  background: radial-gradient(
+    ellipse at center,
+    rgb(255, 0, 0) 0%,
+    rgb(231, 0, 0) 25%,
+    rgba(169, 0, 0, 0) 89%,
+    rgba(158, 0, 0, 0) 100%
+  );
+}
+
+/* Legal-move hints: a dot on empty squares, a ring on captures. */
+.cl-dot,
+.cl-ring {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.cl-dot {
+  left: 35%;
+  top: 35%;
+  width: 30%;
+  height: 30%;
+  background: var(--cl-hint);
+}
+.cl-ring {
+  inset: 5%;
+  background: radial-gradient(circle closest-side, transparent 77.5%, var(--cl-hint) 78.5%);
+}
+
+/* Square under the dragged piece. */
+.cl-sq.cl-hover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 calc(12.5cqw * 0.05) var(--cl-hover);
+  pointer-events: none;
+}
+
+/* Coordinates inside the edge squares, in the opposite square colour. */
+.cl-coord {
+  position: absolute;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: calc(12.5cqw * 0.2);
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+  color: var(--cl-dark);
+}
+.cl-d > .cl-coord {
+  color: var(--cl-light);
+}
+.cl-coord-rank {
+  left: 4%;
+  top: 4%;
+}
+.cl-coord-file {
+  right: 5%;
+  bottom: 3%;
+}
+
+/* Pieces: one element per piece, placed with a transform so moves can
+   animate with a CSS transition. They never take pointer events: the board
+   maps coordinates to squares itself. */
+.cl-pieces {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.cl-piece,
+.cl-drag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 12.5%;
+  height: 12.5%;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: var(--cl-piece-size);
+  pointer-events: none;
+}
+.cl-piece.cl-ghost {
+  opacity: 0.3;
+}
+.cl-drag {
+  z-index: 5;
+  will-change: transform;
+  filter: drop-shadow(0 calc(12.5cqw * 0.03) calc(12.5cqw * 0.03) rgba(0, 0, 0, 0.22));
+}
+
+/* Arrows drawn above the pieces (viewBox 0 0 8 8: one unit per square). */
+.cl-arrows {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 3;
+  pointer-events: none;
+  overflow: visible;
+}
+.cl-arrow {
+  opacity: var(--cl-arrow-opacity);
+}
+.cl-arrow polyline {
+  fill: none;
+  stroke: var(--cl-arrow);
+  stroke-width: 0.22;
+  stroke-linejoin: miter;
+  stroke-linecap: butt;
+}
+.cl-arrow polygon {
+  fill: var(--cl-arrow);
+}
+
+/* Promotion picker: a white column over the promotion file. */
+.cl-promo-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+}
+.cl-promo {
+  position: absolute;
+  z-index: 7;
+  width: 12.5%;
+  height: calc(12.5% * 4.5);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 3px;
+  box-shadow: 3px 3px 10px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.cl-promo.cl-promo-up {
+  flex-direction: column-reverse;
+}
+.cl-promo-piece {
+  flex: 0 0 calc(100% / 4.5);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: var(--cl-piece-size);
+  cursor: pointer;
+  transition: background-size 80ms ease-out;
+}
+.cl-promo-piece:hover,
+.cl-promo-piece:focus-visible {
+  background-color: #ececec;
+  background-size: 100%;
+  outline: none;
+}
+.cl-promo-cancel {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: #f1f1f1;
+  color: #8b8987;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: calc(12.5cqw * 0.22);
+  line-height: 1;
+  cursor: pointer;
+}
+.cl-promo-cancel:hover {
+  background: #e3e3e3;
+  color: #5c5a58;
+}

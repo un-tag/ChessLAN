@@ -1,0 +1,45 @@
+{
+  "name": "chesslan",
+  "productName": "ChessLAN",
+  "version": "3.0.0",
+  "description": "Offline LAN chess for two: clocks, premoves, chat, voice, history, ratings and bots.",
+  "private": true,
+  "main": "out/main/main.js",
+  "author": "un-tag",
+  "homepage": "https://github.com/un-tag/ChessLAN",
+  "scripts": {
+    "dev": "node scripts/build.mjs --dev && concurrently -k \"vite\" \"node scripts/dev-electron.mjs\"",
+    "build": "vite build && node scripts/build.mjs",
+    "hub": "node scripts/build.mjs && node out/hub/cli.js",
+    "start": "electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:e2e": "npm run build && playwright test --project web",
+    "icons": "python3 scripts/make-icons.py",
+    "dist:mac": "npm run build && electron-builder --mac --arm64 --publish never",
+    "dist:win": "npm run build && electron-builder --win --x64 --publish never",
+    "test:electron": "npm run build && playwright test --project electron"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "22.18.12",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@types/ws": "8.18.1",
+    "@vitejs/plugin-react": "6.1.2",
+    "concurrently": "9.2.5",
+    "electron": "44.9.3",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vitest": "5.0.5",
+    "ws": "8.22.0",
+    "zustand": "5.0.8"
+  }
+}
