@@ -1,6 +1,8 @@
 # Push a tag like v2.0.1 (matching package.json) to build the Mac and
-# Windows apps and publish them as a GitHub Release. The host Mac picks the
-# release up by itself and passes the Windows update to the other PC.
+# Windows apps and publish them as a GitHub Release. The release stays a
+# draft until both builds have uploaded, so the host Mac never sees a
+# "latest" release without its files. The Mac then picks it up by itself and
+# passes the Windows update to the other PC.
 name: Release
 
 on:
@@ -19,10 +21,10 @@ jobs:
         run: |
           version=$(node -p "require('./package.json').version")
           test "v$version" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME != v$version"; exit 1; }
-      - name: Create the release
+      - name: Create a draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "ChessLAN $GITHUB_REF_NAME" --generate-notes
+        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "ChessLAN $GITHUB_REF_NAME" --generate-notes
 
   build:
     needs: create-release
@@ -48,3 +50,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest
