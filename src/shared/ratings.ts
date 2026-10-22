@@ -48,7 +48,8 @@ export function computeRatings(records: readonly GameRecord[]): RatingState {
     if (!p) players.set(id, (p = freshRatings()));
     return p;
   };
-  const sorted = [...records].sort((a, b) => a.endedAt - b.endedAt);
+  // Same order on every peer, whatever order their logs are in.
+  const sorted = [...records].sort((a, b) => a.endedAt - b.endedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   for (const r of sorted) {
     if (!isRated(r)) continue;
     const cat = r.category as RatedCategory;

@@ -1,10 +1,10 @@
-// Updates without anyone doing anything:
-// - Host (Mac): when online, checks GitHub Releases. A newer version is
-//   downloaded and swapped in on restart (unsigned apps can't use
-//   Squirrel.Mac). It also mirrors the Windows installer for its *own*
-//   version into the hub's /updates/win feed.
-// - Join (Windows): electron-updater with the Mac hub as its feed, so the
-//   Windows app always converges on the host's version over the LAN.
+// Updates come from the Mac, without anyone doing anything:
+// - Mac: when online, checks GitHub Releases. A newer version is downloaded
+//   and swapped in on restart (unsigned apps can't use Squirrel.Mac). It also
+//   mirrors the Windows installer for its *own* version into its hub's
+//   /updates/win feed.
+// - Windows: electron-updater with the Mac peer's hub as its feed, so the
+//   Windows app always converges on the Mac's version over the LAN.
 import { app } from "electron";
 import { spawn } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
@@ -61,7 +61,7 @@ async function download(url: string, dest: string, onProgress?: (pct: number) =>
   renameSync(tmp, dest);
 }
 
-export class HostUpdater {
+export class MacUpdater {
   status: UpdateStatus = { state: "idle" };
   private readyApp: string | null = null;
   private timer: NodeJS.Timeout | null = null;
@@ -152,8 +152,8 @@ function run(cmd: string, args: string[]): Promise<void> {
   });
 }
 
-/** Windows: follows the host's version via the hub's update feed. */
-export class JoinUpdater {
+/** Windows: follows the Mac's version via the Mac hub's update feed. */
+export class WindowsUpdater {
   status: UpdateStatus = { state: "idle" };
   private feed: string | null = null;
   private inGame = false;
@@ -186,8 +186,8 @@ export class JoinUpdater {
     return autoUpdater;
   }
 
-  /** Called whenever the hub is (re)discovered. */
-  async setHub(host: string): Promise<void> {
+  /** Called whenever the Mac peer (the update source) is (re)discovered. */
+  async setSource(host: string): Promise<void> {
     if (!app.isPackaged || process.platform !== "win32") return;
     const feed = `http://${host}/updates/win`;
     const u = await this.load();

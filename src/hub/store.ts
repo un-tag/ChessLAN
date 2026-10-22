@@ -3,7 +3,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { ChatMessage, GameRecord, PlayerRef } from "../shared/protocol";
+import type { ChatMessage, GameRecord, KnownPlayer, PlayerRef } from "../shared/protocol";
 
 export const CHAT_LIMIT = 500;
 
@@ -15,9 +15,10 @@ interface HubMeta {
 export class Store {
   readonly records: GameRecord[] = [];
   readonly chat: ChatMessage[] = [];
-  readonly players = new Map<string, PlayerRef & { lastSeen: number }>();
+  readonly players = new Map<string, KnownPlayer>();
   readonly meta: HubMeta;
   private ids = new Set<string>();
+  private chatIds = new Set<string>();
 
   constructor(private dir: string) {
     mkdirSync(dir, { recursive: true });
@@ -25,7 +26,8 @@ export class Store {
     this.writeJson("hub.json", this.meta);
     this.loadGames();
     this.chat.push(...(this.readJson<ChatMessage[]>("chat.json") ?? []).slice(-CHAT_LIMIT));
-    for (const p of this.readJson<(PlayerRef & { lastSeen: number })[]>("players.json") ?? []) {
+    for (const m of this.chat) this.chatIds.add(m.id);
+    for (const p of this.readJson<KnownPlayer[]>("players.json") ?? []) {
       this.players.set(p.id, p);
     }
   }
@@ -75,14 +77,45 @@ export class Store {
     return true;
   }
 
-  addChat(m: ChatMessage): void {
-    this.chat.push(m);
-    if (this.chat.length > CHAT_LIMIT) this.chat.splice(0, this.chat.length - CHAT_LIMIT);
+  get recordIds(): string[] {
+    return [...this.ids];
+  }
+
+  get chatIdList(): string[] {
+    return [...this.chatIds];
+  }
+
+  /** Adds chat messages not seen before (kept in time order); returns the new ones. */
+  addChat(...messages: ChatMessage[]): ChatMessage[] {
+    const fresh = messages.filter((m) => m && typeof m.id === "string" && !this.chatIds.has(m.id));
+    if (!fresh.length) return [];
+    for (const m of fresh) this.chatIds.add(m.id);
+    this.chat.push(...fresh);
+    this.chat.sort((a, b) => a.at - b.at);
+    if (this.chat.length > CHAT_LIMIT) {
+      for (const m of this.chat.splice(0, this.chat.length - CHAT_LIMIT)) this.chatIds.delete(m.id);
+    }
     this.writeJson("chat.json", this.chat);
+    return fresh;
   }
 
   touchPlayer(p: PlayerRef): void {
     this.players.set(p.id, { id: p.id, name: p.name, lastSeen: Date.now() });
     this.writeJson("players.json", [...this.players.values()]);
+  }
+
+  /** Merges players learned from a peer; the most recently seen name wins. Returns true if anything changed. */
+  mergePlayers(list: KnownPlayer[]): boolean {
+    let changed = false;
+    for (const p of list) {
+      if (!p || typeof p.id !== "string") continue;
+      const mine = this.players.get(p.id);
+      if (!mine || p.lastSeen > mine.lastSeen) {
+        this.players.set(p.id, { id: p.id, name: String(p.name).slice(0, 30), lastSeen: p.lastSeen });
+        changed = true;
+      }
+    }
+    if (changed) this.writeJson("players.json", [...this.players.values()]);
+    return changed;
   }
 }

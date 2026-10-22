@@ -24,9 +24,10 @@ chess.com, with no internet required.
 | Constraint | Consequence |
 | --- | --- |
 | Works with no internet | Nothing at runtime may depend on a CDN, cloud service, web font or push service. Everything is bundled. |
-| Brother never sees a Windows Firewall "Allow" prompt | The Windows app only makes **outbound** connections. Discovery uses outbound TCP probes, never UDP listening. The installer pre-approves the app in Windows Firewall (one UAC at install, done by the technical brother) as a safety net for voice. |
+| Brother never sees a Windows Firewall "Allow" prompt | The installer pre-approves the app in Windows Firewall (one UAC at install, done by the technical brother). If that was declined, the app still works: a link only needs one direction to connect, so the PC can still connect out to the Mac. |
 | Brother isn't technical | Starts at login into the tray. Challenges pop the window up. Updates arrive silently from the Mac. Zero settings required. |
-| Mac owner has admin | The Mac is the host. A macOS firewall or Gatekeeper prompt there is acceptable. |
+| No special computer | The two apps are equal peers. Either can be on its own, and either can referee a game. The single exception is updates, which always come from the Mac (your choice). |
+| Mac owner has admin | A macOS firewall or Gatekeeper prompt there is acceptable. |
 | Mac + Windows | One cross-platform codebase. |
 
 ## Architecture
@@ -37,43 +38,56 @@ WebRTC behave identically. It can also be developed and tested end to end in
 headless Chromium.
 
 ```
- Mac (host role)                                Windows (join role)
-┌──────────────────────────────┐               ┌──────────────────────────┐
-│ Electron main                │               │ Electron main            │
-│  ├─ Hub (HTTP+WS :47800)  ◄──┼── ws (TCP) ───┼── renderer (UI)          │
-│  │   games, clocks, chat,    │               │  tray, discovery (TCP    │
-│  │   history, rtc relay,     │               │  probe), electron-updater│
-│  │   serves Windows updates  │               │  (feed = Mac hub)        │
-│  └─ renderer (UI) ── ws ─────┤               └──────────────────────────┘
-│     tray, GitHub update check│
-└──────────────────────────────┘
-          ▲  voice: WebRTC peer connection between the two renderers,
-          └─ signalled through the hub (LAN host candidates only)
+   Mac app (peer)                         Windows app (peer)
+ ┌───────────────────────────┐          ┌───────────────────────────┐
+ │ hub :47800                │◄─ sync ──│ hub :47800                │
+ │  full copy of games,      │  (link)  │  full copy of games,      │
+ │  ratings, chat, players   │          │  ratings, chat, players   │
+ │ discovery + election      │          │ discovery + election      │
+ │ UI ──► referee's hub      │          │ UI ──► referee's hub      │
+ └───────────────────────────┘          └───────────────────────────┘
+        voice: WebRTC directly between the two UIs (LAN only)
 ```
 
-- **Hub** (`src/hub`): plain Node, no Electron dependency. It runs inside the
-  Mac app's main process and standalone for tests and development. It is the
-  single source of truth for games, clocks, chat and history.
-- **Renderer** (`src/renderer`): the whole UI. It connects to the hub with a
-  WebSocket, including on the Mac (via `127.0.0.1`). It also runs in a plain
-  browser when the hub serves it, which is how end-to-end tests run.
+- **Every app is the same peer.** Each runs a hub, discovery and the UI.
+  There are no roles and nothing to configure.
+- **Hub** (`src/hub`): plain Node, no Electron dependency. It holds that
+  computer's full copy of the game log, chat and known players, runs live
+  games, and syncs with the other peer. It also runs standalone for tests
+  and development.
+- **Renderer** (`src/renderer`): the whole UI. It connects by WebSocket to
+  whichever hub is currently the referee: its own when alone, possibly the
+  other computer's when both are up. It also runs in a plain browser when a
+  hub serves it, which is how end-to-end tests run.
 - **Shared** (`src/shared`): chess rules, time controls, ratings, protocol
-  types and the bot engine. Both the hub and the renderer use it.
+  types and the bot engine.
 - **Main** (`src/main`): window and tray, start at login, single instance,
-  hub hosting, discovery, notifications, microphone permission and updates.
+  the local hub, discovery and election, notifications, microphone
+  permission and updates.
 
-### Roles and discovery
+### Finding each other and picking a referee
 
-- At first run you choose the role: **Host** (default on macOS) or **Join**
-  (default on Windows). You can change it later in Settings.
-- A joiner finds the host in this order:
-  1. The last known address.
-  2. A TCP probe of port 47800 across each local IPv4 subnet (up to /22),
+- **Discovery:** every app listens on TCP 47800 and looks for other
+  ChessLAN apps, in this order:
+  1. The address that worked last time, or one entered manually in
+     Settings.
+  2. A TCP probe of 47800 across each local IPv4 subnet (up to /22),
      confirmed by `GET /hello`.
-  3. A manually entered address (Settings → Advanced).
 
-  All of these are outbound connections.
-- The hub listens on TCP 47800. Nothing listens on the Windows machine.
+  It keeps looking every few seconds while alone.
+- **Referee election:** when two apps see each other, exactly one hub
+  referees, decided the same way on both sides:
+  - If each can reach the other, the one with the smaller node id wins.
+  - If only one direction works (for example a firewall blocks the PC), the
+    reachable one wins. Each app asks the other "can you reach me?" through
+    `GET /reach` to find out.
+- **Following:** the other app's hub links to the referee to sync data both
+  ways, and its UI reconnects to the referee's hub. If the referee goes away,
+  everything falls back to the app's own hub within seconds.
+- **Alone:** an app on its own uses its own hub. Bots, history, stats and
+  settings all work, and challenges wait until the other app turns up.
+- **Versions:** apps only link when their protocol versions match. A
+  mismatched app keeps working on its own and updates itself (see Updates).
 
 ### Background behaviour
 
@@ -159,8 +173,8 @@ headless Chromium.
     the flag falls first.
   - If the disconnect happens before both players have moved, the game is
     aborted instead.
-- **When the hub restarts:** an unfinished game is lost. The host is one of
-  the two players, so this is acceptable.
+- **When the referee's app quits:** an unfinished game is lost. The referee
+  is one of the two players, so this is acceptable.
 - **Sleep:** while a game is in progress the app keeps the computer awake
   (`prevent-app-suspension`; the display may still sleep), so the hub
   can't fall asleep mid-game.
@@ -198,8 +212,11 @@ headless Chromium.
 
 ## Ratings and history
 
-- **The game log is the single source of truth.** The hub stores each
-  finished game once, in an append-only JSONL file.
+- **The game log is the source of truth, and every app has a full copy.**
+  The referee records each finished game once, in an append-only JSONL file,
+  and the link copies it to the other app. Because records are never edited,
+  two copies merge simply by taking every record id from either side. Ratings
+  sort games by end time, then id, so both apps compute the same numbers.
   - A record holds: both players, the time control, rated or not, the UCI
     move list, result, reason, start and end times, and the bot if any.
 - **Everything else is derived from the log:** ratings, head-to-head records,
@@ -230,21 +247,21 @@ headless Chromium.
   pusher, an attacker, a turtle, an early-queen lover, a random mover), each
   at a fixed strength.
 - **Rules for bot games:** unrated, untimed by default (a time control is
-  optional), instant takebacks. Games are saved to history and queued locally
-  if the hub is unreachable.
+  optional), instant takebacks. Games are saved to the current hub's log
+  (the app's own when alone) and reach the other app at the next sync.
 
 ## Communication
 
-- **Text chat:** always available while connected, in the home screen and in
-  games. The hub stores the last 500 messages. You get an unread badge, and
-  a notification while the window is hidden.
+- **Text chat:** always available while both apps are linked, in the home
+  screen and in games. Both apps keep the last 500 messages. You get an
+  unread badge, and a notification while the window is hidden.
 - **Voice:**
   - **When it's live:** whenever **both** players have the app window open
     (not just the tray process), whether or not a game is on.
   - **Mute:** each side has a mute button. The mute state persists.
   - **Transport:** WebRTC audio with echo cancellation, noise suppression
-    and auto gain, so speakers work. Signalling goes through the hub, and
-    the connection uses LAN host candidates with no STUN or TURN.
+    and auto gain, so speakers work. Signalling goes through the referee's
+    hub, and the connection uses LAN host candidates with no STUN or TURN.
   - **Firewall:** the Windows installer's firewall rule ensures no prompt.
 
 ## Updates
@@ -254,19 +271,21 @@ headless Chromium.
   from Actions → Release → Run workflow, or by pushing a matching `v*` tag.
   The release stays a draft until both uploads finish, and publishing it
   creates the tag.
-- **Mac (host):**
-  - When online, it checks GitHub Releases.
-  - If there's a newer version, it downloads the zip and offers
-    "Restart to update". It then swaps the app bundle itself, because
-    unsigned apps can't use Squirrel.Mac.
-  - It keeps a cached copy of the **Windows** update files for its own
-    version and serves them at `/updates/win/` on the hub.
-- **Windows (join):** electron-updater's feed is the Mac hub. Updates
-  download in the background and install silently when no game is in
-  progress. The brother never acts.
-- **Version mismatch:** the protocol version is checked in `hello`. On a
-  mismatch the joiner shows "Updating…", or "Ask the host to update" if no
-  matching update is available.
+- **Updates are the one centralized thing: they come from the Mac.**
+  - **Mac:** when online, checks GitHub Releases. If there's a newer
+    version, it downloads the zip and offers "Restart to update". It then
+    swaps the app bundle itself, because unsigned apps can't use
+    Squirrel.Mac.
+  - **Mac's copy for Windows:** the Mac keeps the **Windows** update for its
+    own version and serves it at `/updates/win/` on its hub, whatever the
+    referee election says.
+  - **Windows:** never contacts GitHub. electron-updater's feed is the Mac
+    peer, found by discovery (`/hello` says which peer serves Windows
+    updates). Updates download in the background and install silently when
+    no game is in progress. The brother never acts.
+- **Version mismatch:** peers with different protocol versions don't link
+  and each keeps working on its own. The Mac updates from GitHub; the PC then
+  updates from the Mac, which brings them back in step.
 
 ## Packaging
 
@@ -292,16 +311,21 @@ headless Chromium.
   - Draw rules.
   - Time-control categories and Elo.
   - Hub game logic with a fake clock.
+  - Peer sync (merging logs both ways, live pushes) and referee election.
 - **End-to-end (Playwright, headless Chromium):**
   - A standalone hub serves the renderer, with two browser contexts as the
     two brothers.
   - Covers challenge and accept, moves, premoves, flagging, draws,
     takebacks, resign, rematch, chat, voice connection (fake media),
     reconnects, history and ratings.
-- **Real app (Playwright + Electron, under xvfb):** launches the packaged
-  UI twice, as host and joiner, and checks discovery, a challenge played
-  across both windows, the bot's Web Worker loading from `file://`, and a
-  challenge popping a window back up from the tray.
+- **Real app (Playwright + Electron, under xvfb):** launches the app twice
+  as two peers (on different ports) and checks:
+  - Discovery and election.
+  - History syncing both ways.
+  - A challenge played across both windows.
+  - The bot's Web Worker loading from `file://`.
+  - A challenge popping a window back up from the tray.
+  - Falling back to solo when the referee quits.
 - **CI** runs all three on Linux. Release builds run on macOS and Windows
   runners.
 

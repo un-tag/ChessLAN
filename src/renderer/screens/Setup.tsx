@@ -1,7 +1,6 @@
 import { useState } from "react";
-import type { Role } from "../../shared/bridge";
 import { connection } from "../net/connection";
-import { isDesktop, platform } from "../platform";
+import { platform } from "../platform";
 import { navigate, set } from "../state/store";
 
 const newId = (): string =>
@@ -9,15 +8,11 @@ const newId = (): string =>
 
 export function Setup() {
   const [name, setName] = useState("");
-  const [role, setRole] = useState<Role>(platform.platform === "darwin" ? "host" : "join");
   const ready = name.trim().length > 0;
 
   const save = async () => {
     if (!ready) return;
-    const config = await platform.setConfig({
-      player: { id: newId(), name: name.trim().slice(0, 30) },
-      role: isDesktop ? role : "join",
-    });
+    const config = await platform.setConfig({ player: { id: newId(), name: name.trim().slice(0, 30) } });
     set({ config });
     navigate({ name: "home" });
     connection.start();
@@ -38,21 +33,7 @@ export function Setup() {
             <span>What's your name?</span>
             <input autoFocus value={name} maxLength={30} onChange={(e) => setName(e.target.value)} placeholder="Your name" />
           </label>
-          {isDesktop && (
-            <fieldset className="roles">
-              <legend>This computer…</legend>
-              <label className={`role ${role === "host" ? "selected" : ""}`}>
-                <input type="radio" name="role" checked={role === "host"} onChange={() => setRole("host")} />
-                <b>Hosts the games</b>
-                <span className="muted small">Pick this on the Mac. It keeps the history and ratings.</span>
-              </label>
-              <label className={`role ${role === "join" ? "selected" : ""}`}>
-                <input type="radio" name="role" checked={role === "join"} onChange={() => setRole("join")} />
-                <b>Joins the host</b>
-                <span className="muted small">Pick this on the other computer. It finds the host on your Wi-Fi by itself.</span>
-              </label>
-            </fieldset>
-          )}
+          <p className="muted small">The other computer's ChessLAN finds this one on your Wi-Fi by itself.</p>
           <button className="btn huge primary" type="submit" disabled={!ready}>
             Let's play
           </button>

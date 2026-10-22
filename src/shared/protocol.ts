@@ -1,9 +1,9 @@
-// Messages between the hub (on the host Mac) and each app's renderer.
-// Everything travels as JSON over one WebSocket per player.
+// Messages between a hub and the renderers using it (/ws), and between the
+// hubs of two peers (/peer). Everything travels as JSON over WebSockets.
 import type { EndReason, Result, Side } from "./chess/game";
 import type { Category, TimeControl } from "./timeControl";
 
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 export const HUB_PORT = 47800;
 export const ABANDON_MS = 60_000;
 /** How long a challenge waits, including for a player whose app isn't running yet. */
@@ -43,8 +43,32 @@ export interface PlayerPresence extends PlayerRef {
   online: boolean;
   windowOpen: boolean;
   activity: Activity;
-  isHost: boolean;
 }
+
+export interface KnownPlayer extends PlayerRef {
+  lastSeen: number;
+}
+
+/** GET /hello: how peers recognise each other. */
+export interface HelloInfo {
+  app: "chesslan";
+  protocol: number;
+  version: string;
+  nodeId: string;
+  hostName: string;
+  /** A game is in progress on this hub (it must stay the referee). */
+  liveGame: boolean;
+  /** This hub serves the Windows update feed at /updates/win/ (the Mac). */
+  winUpdates: boolean;
+}
+
+/** Hub-to-hub sync over /peer. Both ends speak the same messages. */
+export type PeerMessage =
+  | { type: "peerHello"; nodeId: string; protocol: number }
+  | { type: "have"; records: string[]; chat: string[]; players: KnownPlayer[] }
+  | { type: "records"; records: GameRecord[] }
+  | { type: "chat"; messages: ChatMessage[] }
+  | { type: "players"; players: KnownPlayer[] };
 
 export type ColorChoice = "white" | "black" | "random";
 

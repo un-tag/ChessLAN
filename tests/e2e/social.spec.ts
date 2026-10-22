@@ -26,7 +26,7 @@ test("first launch asks for a name", async ({ browser, hub }) => {
   await page.goto(hub.url);
   await page.getByPlaceholder("Your name").fill("Robin");
   await page.getByRole("button", { name: "Let's play" }).click();
-  await expect(page.locator(".conn-pill.connected")).toBeVisible();
+  await expect(page.locator('[data-conn="connected"]')).toBeVisible();
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByLabel("Name")).toHaveValue("Robin");
 });

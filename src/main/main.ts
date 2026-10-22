@@ -1,5 +1,6 @@
-// Electron main process: window + tray lifecycle, hosting the hub (host
-// role), finding it (join role), notifications, permissions and updates.
+// Electron main process: window + tray lifecycle, this app's hub, finding
+// the other app and electing the referee, notifications, permissions and
+// updates (which come from the Mac).
 import {
   BrowserWindow,
   Menu,
@@ -22,8 +23,9 @@ import { IPC, type AppConfig, type HubLocation, type TrayAction, type UpdateStat
 import { HUB_PORT } from "../shared/protocol";
 import { startHub, type Hub } from "../hub/hub";
 import { loadConfig, publicConfig, saveConfig } from "./config";
-import { discoverHub, localAddresses } from "./discovery";
-import { HostUpdater, JoinUpdater, winUpdatesDir } from "./updates";
+import { localAddresses } from "./discovery";
+import { PeerManager } from "./peers";
+import { MacUpdater, WindowsUpdater, winUpdatesDir } from "./updates";
 
 const isMac = process.platform === "darwin";
 const devServer = process.env.VITE_DEV_SERVER_URL;
@@ -34,11 +36,14 @@ let tray: Tray | null = null;
 let quitting = false;
 let windowOpen = false;
 let hub: Hub | null = null;
-let hubStarting: Promise<Hub | null> | null = null;
+let peers: PeerManager | null = null;
 let sleepBlocker: number | null = null;
 
-const hostUpdater = new HostUpdater(sendUpdateStatus);
-const joinUpdater = new JoinUpdater(sendUpdateStatus);
+const isWindows = process.platform === "win32";
+const macUpdater = new MacUpdater(sendUpdateStatus);
+const windowsUpdater = new WindowsUpdater(sendUpdateStatus);
+// A second copy on one machine (tests, development) needs its own port.
+const hubPort = Number(process.env.CHESSLAN_PORT) || HUB_PORT;
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -63,57 +68,46 @@ function friendlyHostName(): string {
   return hostname().replace(/\.local$/, "");
 }
 
-// ---------- Hub (host role) ----------
+// ---------- Hub and peers ----------
 
-async function ensureHub(): Promise<Hub | null> {
-  if (hub) return hub;
-  hubStarting ??= startHub({
-    dataDir: join(app.getPath("userData"), "hub"),
-    updatesDir: winUpdatesDir(),
-    appVersion: app.getVersion(),
-    hostName: friendlyHostName(),
-    port: HUB_PORT,
-    log: (m) => console.log(`[hub] ${m}`),
-  })
-    .then((h) => (hub = h))
-    .catch((e) => {
-      console.error("Hub failed to start", e);
-      dialog.showErrorBox(
-        "ChessLAN can't host games",
-        `Port ${HUB_PORT} is in use or blocked. Is another copy of ChessLAN already running?\n\n${(e as Error).message}`,
-      );
-      return null;
-    })
-    .finally(() => (hubStarting = null));
-  return hubStarting;
-}
-
-async function stopHub(): Promise<void> {
-  const h = hub ?? (await hubStarting);
-  hub = null;
-  await h?.close();
-}
-
-async function applyRole(role: AppConfig["role"]): Promise<void> {
-  if (role === "host") {
-    await ensureHub();
-    if (app.isPackaged) hostUpdater.start();
-  } else {
-    hostUpdater.stop();
-    await stopHub();
+async function startNode(): Promise<void> {
+  try {
+    hub = await startHub({
+      dataDir: join(app.getPath("userData"), "hub"),
+      // Only the Mac mirrors (and serves) the Windows update.
+      updatesDir: isMac ? winUpdatesDir() : undefined,
+      appVersion: app.getVersion(),
+      hostName: friendlyHostName(),
+      port: hubPort,
+      log: (m) => console.log(`[hub] ${m}`),
+    });
+  } catch (e) {
+    dialog.showErrorBox(
+      "ChessLAN can't start",
+      `Port ${hubPort} is in use. Is another copy of ChessLAN already running?\n\n${(e as Error).message}`,
+    );
+    quit();
+    return;
   }
+  peers = new PeerManager({
+    hub,
+    preferred: () => [loadConfig().peerAddress, loadConfig().lastPeer],
+    remember: (host) => {
+      if (loadConfig().lastPeer !== host) saveConfig({ lastPeer: host });
+    },
+    onChange: (state) => {
+      win?.webContents.send(IPC.hubChanged);
+      // Windows takes its updates from the Mac peer only.
+      if (isWindows && state.updateSource) void windowsUpdater.setSource(state.updateSource.host);
+    },
+  });
+  if (isMac && app.isPackaged) macUpdater.start();
 }
 
 async function findHub(): Promise<HubLocation | null> {
-  const config = loadConfig();
-  if (config.role === "host") {
-    const h = await ensureHub();
-    return h ? { url: `ws://127.0.0.1:${h.port}/ws`, host: `127.0.0.1:${h.port}` } : null;
-  }
-  const host = await discoverHub([config.hubAddress, config.lastHub]);
-  if (!host) return null;
-  if (host !== config.lastHub) saveConfig({ lastHub: host });
-  void joinUpdater.setHub(host);
+  if (!peers) return null;
+  await peers.ready;
+  const host = peers.state.referee;
   return { url: `ws://${host}/ws`, host };
 }
 
@@ -242,9 +236,9 @@ function registerIpc(): void {
   ipcMain.handle(IPC.setConfig, async (_e, patch: Partial<AppConfig>) => {
     const before = loadConfig();
     const next = saveConfig(patch);
-    if (patch.role !== undefined && patch.role !== before.role) await applyRole(next.role);
+    if (patch.peerAddress !== undefined && patch.peerAddress !== before.peerAddress) peers?.poke();
     if (patch.startAtLogin !== undefined) applyLoginItem(next.startAtLogin);
-    if (patch.player && !before.player && next.role === "host" && isMac) void askForMic();
+    if (patch.player && !before.player) void askForMic();
     return publicConfig(next);
   });
   ipcMain.handle(IPC.findHub, () => findHub());
@@ -262,7 +256,7 @@ function registerIpc(): void {
     n.show();
   });
   ipcMain.on(IPC.setInGame, (_e, inGame: boolean) => {
-    joinUpdater.setInGame(inGame);
+    windowsUpdater.setInGame(inGame);
     // Don't let the computer (and with it the hub) sleep mid-game; the display may.
     if (inGame && sleepBlocker === null) sleepBlocker = powerSaveBlocker.start("prevent-app-suspension");
     if (!inGame && sleepBlocker !== null) {
@@ -271,13 +265,13 @@ function registerIpc(): void {
     }
   });
   ipcMain.on(IPC.checkUpdates, () => {
-    if (loadConfig().role === "host") void hostUpdater.check();
-    else void joinUpdater.check();
+    if (isMac) void macUpdater.check();
+    else void windowsUpdater.check();
   });
   ipcMain.on(IPC.installUpdate, () => {
     quitting = true;
-    if (loadConfig().role === "host") hostUpdater.install();
-    else joinUpdater.install();
+    if (isMac) macUpdater.install();
+    else windowsUpdater.install();
   });
   ipcMain.handle(IPC.savePgn, async (_e, filename: string, pgn: string) => {
     const res = await dialog.showSaveDialog(win!, {
@@ -316,9 +310,9 @@ async function start(): Promise<void> {
   const launchedHidden =
     process.argv.includes("--hidden") || (isMac && app.getLoginItemSettings().wasOpenedAtLogin);
   // First run always shows the window so setup can happen.
+  await startNode();
   createWindow(!launchedHidden || !config.player);
   if (isMac && launchedHidden && config.player) app.dock?.hide();
-  if (config.role) await applyRole(config.role);
   if (config.player) void askForMic();
 
   app.on("activate", () => showWindow());
@@ -329,6 +323,9 @@ async function start(): Promise<void> {
   app.on("will-quit", (e) => {
     if (!hub) return;
     e.preventDefault();
-    void stopHub().finally(() => app.exit(0));
+    peers?.stop();
+    const h = hub;
+    hub = null;
+    void h.close().finally(() => app.exit(0));
   });
 }
