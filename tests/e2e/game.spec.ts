@@ -129,3 +129,45 @@ test("pawns promote to a queen by default, or ask when set to", async ({ alex, s
   await expect(square(white.page, "h1")).toHaveAttribute("data-occupant", "bN");
   await expect(moveList(white.page)).toContainText("gxh1=N");
 });
+
+test("right after a game, the other player can challenge straight away", async ({ alex, sam }) => {
+  const [white, black] = await startGame(alex, sam, "play-1");
+  await play(white, black, ["f2f3", "e7e5", "g2g4", "d8h4"]);
+  await expect(white.page.getByTestId("game-over")).toBeVisible();
+  // White stays on the result screen; black goes home and challenges.
+  await black.page.getByRole("button", { name: "Home" }).click();
+  await expect(black.page.getByTestId("play-10")).toBeEnabled();
+  await black.page.getByTestId("play-10").click();
+  await white.page.getByTestId("accept").click();
+  await expect(white.page.getByText("10 min · Rated Rapid")).toBeVisible();
+});
+
+test("the result card can start a different game", async ({ alex, sam }) => {
+  const [white, black] = await startGame(alex, sam, "play-1");
+  await play(white, black, ["f2f3", "e7e5", "g2g4", "d8h4"]);
+  await white.page.getByTestId("game-over").getByRole("button", { name: "10 min" }).click();
+  await expect(white.page.getByTestId("game-over")).toContainText(`Waiting for ${black.name}`);
+  await black.page.getByTestId("accept").click();
+  await expect(black.page.getByText("10 min · Rated Rapid")).toBeVisible();
+});
+
+test("a challenge waits for an app that isn't running and pops up when it opens", async ({ alex, sam }) => {
+  await expect(alex.page.getByText("Sam is here")).toBeVisible();
+  await sam.close();
+  await expect(alex.page.getByText("Sam's app isn't running")).toBeVisible();
+  await alex.page.getByTestId("play-1").click();
+  await expect(alex.page.getByText("Sam will see it when ChessLAN opens")).toBeVisible();
+  await sam.open();
+  await sam.page.getByTestId("accept").click();
+  await expect(alex.page.getByRole("grid", { name: "Chess board" })).toBeVisible();
+});
+
+test("playing the computer doesn't block a challenge", async ({ alex, sam }) => {
+  await sam.page.getByTestId("play-bot").click();
+  await sam.page.getByTestId("start-bot").click();
+  await expect(alex.page.getByText("Sam is playing the computer")).toBeVisible();
+  await alex.page.getByTestId("play-1").click();
+  await sam.page.getByTestId("accept").click();
+  await expect(sam.page.getByText("1 min · Rated Bullet")).toBeVisible();
+  await expect(alex.page.getByText("Sam is playing the computer")).toBeHidden();
+});

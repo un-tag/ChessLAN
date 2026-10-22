@@ -145,6 +145,42 @@ describe("hub", () => {
     sam.close();
   });
 
+  it("holds a challenge for a player whose app isn't running yet", async () => {
+    const sam = await new TestClient("sam", "Sam").open();
+    sam.close(); // Sam is known to the hub but offline.
+    const alex = await new TestClient("alex", "Alex").open();
+    alex.send({ type: "challenge", to: "sam", spec: { tc: { initialMs: 60_000, incrementMs: 0 }, color: "random", rated: true } });
+    await alex.next("challenges", (m) => m.challenges.length === 1);
+    const sam2 = await new TestClient("sam", "Sam").open();
+    const { challenges } = await sam2.next("challenges", (m) => m.challenges.length === 1);
+    expect(challenges[0].from.id).toBe("alex");
+    alex.close();
+    sam2.close();
+  });
+
+  it("starts the game when both challenge each other the same way", async () => {
+    const alex = await new TestClient("alex", "Alex").open();
+    const sam = await new TestClient("sam", "Sam").open();
+    const spec = { tc: { initialMs: 600_000, incrementMs: 0 }, color: "random" as const, rated: true };
+    alex.send({ type: "challenge", to: "sam", spec });
+    await sam.next("challenges", (m) => m.challenges.length === 1);
+    sam.send({ type: "challenge", to: "alex", spec });
+    const g = await alex.game((v) => v.moves.length === 0);
+    expect([g.white.id, g.black.id].sort()).toEqual(["alex", "sam"]);
+    alex.close();
+    sam.close();
+  });
+
+  it("only treats live games as busy, whatever the app reports", async () => {
+    const alex = await new TestClient("alex", "Alex").open();
+    const sam = await new TestClient("sam", "Sam").open();
+    sam.send({ type: "presence", windowOpen: true, activity: "game" });
+    const { players } = await alex.next("players", (m) => m.players.some((p) => p.id === "sam" && p.windowOpen));
+    expect(players.find((p) => p.id === "sam")?.activity).toBe("idle");
+    alex.close();
+    sam.close();
+  });
+
   it("relays chat and WebRTC signalling, and keeps chat history", async () => {
     const alex = await new TestClient("alex", "Alex").open();
     const sam = await new TestClient("sam", "Sam").open();

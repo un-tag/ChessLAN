@@ -6,7 +6,8 @@ import type { Category, TimeControl } from "./timeControl";
 export const PROTOCOL = 1;
 export const HUB_PORT = 47800;
 export const ABANDON_MS = 60_000;
-export const CHALLENGE_TTL_MS = 120_000;
+/** How long a challenge waits, including for a player whose app isn't running yet. */
+export const CHALLENGE_TTL_MS = 10 * 60_000;
 
 export interface PlayerRef {
   id: string;
@@ -35,6 +36,7 @@ export interface GameRecord {
   bot?: BotRef & { side: Side };
 }
 
+/** "game" is decided by the hub from live games; apps only report "idle" or "bot". */
 export type Activity = "idle" | "game" | "bot";
 
 export interface PlayerPresence extends PlayerRef {

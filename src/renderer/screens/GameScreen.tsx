@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Game, otherSide, type MoveInfo, type Side } from "../../shared/chess/game";
 import type { GameView } from "../../shared/protocol";
 import { computeRatings, ratingsFor } from "../../shared/ratings";
-import { animationMsFor, categoryLabel, categoryOf, formatTimeControl } from "../../shared/timeControl";
+import { ONE_MIN, TEN_MIN, animationMsFor, categoryLabel, categoryOf, formatTimeControl } from "../../shared/timeControl";
 import { Board, type PremoveSpec } from "../board/Board";
 import { Chat } from "../components/Chat";
 import {
@@ -18,6 +18,7 @@ import { connection } from "../net/connection";
 import { platform } from "../platform";
 import { moveSound, sounds } from "../sound";
 import { myId, navigate, serverNow, useStore } from "../state/store";
+import { AdvancedModal, sendChallenge } from "./Home";
 import { reasonText, resultFor } from "./results";
 
 export function GameScreen() {
@@ -379,6 +380,8 @@ function Banners({ view, mySide, oppName }: { view: GameView; mySide: Side; oppN
 
 function GameOver({ view, mySide, oppName }: { view: GameView; mySide: Side; oppName: string }) {
   const [hidden, setHidden] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
+  const outgoing = useStore((s) => s.challenges.find((c) => c.from.id === myId()));
   const send = connection.send.bind(connection);
   const outcome = resultFor(view.result, mySide);
   const change = view.ratingChange?.[mySide];
@@ -391,44 +394,70 @@ function GameOver({ view, mySide, oppName }: { view: GameView; mySide: Side; opp
     );
   }
   return (
-    <div className="game-over" data-testid="game-over">
-      <button className="close" onClick={() => setHidden(true)} aria-label="Close">
-        ✕
-      </button>
-      <h2 className={outcome}>
-        {view.reason === "aborted" ? "Game aborted" : outcome === "win" ? "You won!" : outcome === "loss" ? `${oppName} won` : "Draw"}
-      </h2>
-      {view.reason !== "aborted" && <p className="muted">{reasonText(view.reason)}</p>}
-      {change && (
-        <p className="rating-change">
-          {categoryLabel(view.ratingChange!.category)} {change.after}{" "}
-          <span className={change.after >= change.before ? "up" : "down"}>
-            {change.after >= change.before ? "+" : ""}
-            {change.after - change.before}
-          </span>
-        </p>
-      )}
-      <div className="game-over-actions">
-        {view.rematch.includes(mySide) ? (
-          <button className="btn" disabled>
-            Waiting for {oppName}…
-          </button>
-        ) : (
-          <button className="btn primary" onClick={() => send({ type: "rematch", gameId: view.id })}>
-            {view.rematch.includes(opp) ? `${oppName} wants a rematch — Accept` : "Rematch"}
-          </button>
+    <>
+      <div className="game-over" data-testid="game-over">
+        <button className="close" onClick={() => setHidden(true)} aria-label="Close">
+          ✕
+        </button>
+        <h2 className={outcome}>
+          {view.reason === "aborted" ? "Game aborted" : outcome === "win" ? "You won!" : outcome === "loss" ? `${oppName} won` : "Draw"}
+        </h2>
+        {view.reason !== "aborted" && <p className="muted">{reasonText(view.reason)}</p>}
+        {change && (
+          <p className="rating-change">
+            {categoryLabel(view.ratingChange!.category)} {change.after}{" "}
+            <span className={change.after >= change.before ? "up" : "down"}>
+              {change.after >= change.before ? "+" : ""}
+              {change.after - change.before}
+            </span>
+          </p>
         )}
-        <div className="row">
-          {view.reason !== "aborted" && (
-            <button className="btn" onClick={() => navigate({ name: "replay", id: view.id })}>
-              Review
+        <div className="game-over-actions">
+          {view.rematch.includes(mySide) ? (
+            <button className="btn" disabled>
+              Waiting for {oppName}…
+            </button>
+          ) : (
+            <button className="btn primary" onClick={() => send({ type: "rematch", gameId: view.id })}>
+              {view.rematch.includes(opp) ? `${oppName} wants a rematch — Accept` : "Rematch"}
             </button>
           )}
-          <button className="btn" onClick={() => navigate({ name: "home" })}>
-            Home
-          </button>
+          {outgoing ? (
+            <div className="row waiting-inline">
+              <span className="muted small">
+                Waiting for {oppName} · {formatTimeControl(outgoing.tc)}
+              </span>
+              <button className="btn small" onClick={() => send({ type: "challengeCancel", id: outgoing.id })}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="row">
+              <button className="btn" onClick={() => sendChallenge({ tc: ONE_MIN, color: "random", rated: true })}>
+                1 min
+              </button>
+              <button className="btn" onClick={() => sendChallenge({ tc: TEN_MIN, color: "random", rated: true })}>
+                10 min
+              </button>
+              <button className="btn" onClick={() => setAdvanced(true)}>
+                More…
+              </button>
+            </div>
+          )}
+          <div className="row">
+            {view.reason !== "aborted" && (
+              <button className="btn" onClick={() => navigate({ name: "replay", id: view.id })}>
+                Review
+              </button>
+            )}
+            <button className="btn" onClick={() => navigate({ name: "home" })}>
+              Home
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+      {/* Outside the card: its transform would trap a fixed-position modal. */}
+      {advanced && <AdvancedModal onClose={() => setAdvanced(false)} />}
+    </>
   );
 }

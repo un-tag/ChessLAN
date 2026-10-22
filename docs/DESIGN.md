@@ -101,6 +101,20 @@ headless Chromium.
 - **Defaults:** random colour, rated.
 - **Accepting:** the challenged player gets a popup with Accept / Decline. The
   challenger can cancel.
+- **Who can be challenged:** either player can challenge the other at any
+  time, except while one of them is in a live game.
+  - Only a game actually in progress counts as busy, and the hub decides
+    that from live games. A result screen, or playing the computer, never
+    blocks a challenge.
+  - A player whose app isn't running can still be challenged. The
+    challenge pops up as soon as their app connects.
+  - Challenges expire after 10 minutes. Sending a new one replaces your
+    previous one.
+  - If both players challenge each other with the same time control and
+    rated setting, the game simply starts.
+- **After a game:** the result card offers Rematch (same settings, colours
+  swapped) and new-game buttons (1 min, 10 min, More options), so a
+  different game doesn't need a trip back to the home screen.
 - **Notation:** "10|5" means 10 minutes plus 5 seconds added per move. The UI
   shows plain words for the quick buttons.
 
