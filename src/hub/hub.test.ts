@@ -14,8 +14,9 @@ class TestClient {
   inbox: ServerMessage[] = [];
   private waiters: { pred: (m: ServerMessage) => boolean; resolve: (m: ServerMessage) => void }[] = [];
 
-  constructor(public id: string, public name: string) {
-    this.ws = new WebSocket(`ws://127.0.0.1:${hub.port}/ws`);
+  /** `autoPong: false` plays a computer that has gone to sleep. */
+  constructor(public id: string, public name: string, opts: { autoPong?: boolean } = {}) {
+    this.ws = new WebSocket(`ws://127.0.0.1:${hub.port}/ws`, opts);
     this.ws.on("message", (d) => {
       const m = JSON.parse(String(d)) as ServerMessage;
       this.inbox.push(m);
@@ -158,6 +159,57 @@ describe("hub", () => {
     sam2.close();
   });
 
+  it("tells the challenger once the popup is on screen, and forgets it if they drop off", async () => {
+    const alex = await new TestClient("alex", "Alex").open();
+    const sam = await new TestClient("sam", "Sam").open();
+    alex.send({ type: "challenge", to: "sam", spec: { tc: { initialMs: 60_000, incrementMs: 0 }, color: "random", rated: true } });
+    const { challenges } = await sam.next("challenges", (m) => m.challenges.length === 1);
+    const id = challenges[0].id;
+    expect(challenges[0].shownAt).toBeUndefined();
+    // Only the challenged player can confirm it.
+    alex.send({ type: "challengeShown", id });
+    alex.send({ type: "ping", t: 1 });
+    await alex.next("pong");
+    expect(alex.inbox.some((m) => m.type === "challenges" && m.challenges[0]?.shownAt)).toBe(false);
+    sam.send({ type: "challengeShown", id });
+    await alex.next("challenges", (m) => !!m.challenges[0]?.shownAt);
+    // Sam's app drops off: the popup went with it.
+    sam.close();
+    await alex.next("challenges", (m) => m.challenges.length === 1 && !m.challenges[0].shownAt);
+    const sam2 = await new TestClient("sam", "Sam").open();
+    const again = await sam2.next("challenges", (m) => m.challenges.length === 1);
+    expect(again.challenges[0]).toMatchObject({ id });
+    expect(again.challenges[0].shownAt).toBeUndefined();
+    alex.close();
+    sam2.close();
+  });
+
+  it("shares each player's microphone state and ignores junk", async () => {
+    const alex = await new TestClient("alex", "Alex").open();
+    const sam = await new TestClient("sam", "Sam").open();
+    const samMic = (m: { players: { id: string; mic: unknown }[] }) => m.players.find((p) => p.id === "sam")?.mic;
+    sam.send({ type: "presence", windowOpen: true, activity: "idle", mic: "muted" });
+    await alex.next("players", (m) => samMic(m) === "muted");
+    sam.send({ type: "presence", windowOpen: true, activity: "idle", mic: "loud" as never });
+    await alex.next("players", (m) => samMic(m) === null);
+    alex.close();
+    sam.close();
+  });
+
+  it("drops a player whose computer goes silent, and keeps one that answers", async () => {
+    await hub.close();
+    hub = await startHub({ dataDir: dir, appVersion: "test", port: 0, host: "127.0.0.1", heartbeatMs: 40, silentMs: 150 });
+    const alex = await new TestClient("alex", "Alex").open();
+    const sam = await new TestClient("sam", "Sam", { autoPong: false }).open();
+    await alex.next("players", (m) => m.players.some((p) => p.id === "sam" && p.online));
+    // Sam never answers a ping, as if asleep. Alex's socket answers by itself.
+    await alex.next("players", (m) => m.players.some((p) => p.id === "sam" && !p.online));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(alex.ws.readyState).toBe(WebSocket.OPEN);
+    alex.close();
+    sam.close();
+  });
+
   it("starts the game when both challenge each other the same way", async () => {
     const alex = await new TestClient("alex", "Alex").open();
     const sam = await new TestClient("sam", "Sam").open();
@@ -174,7 +226,7 @@ describe("hub", () => {
   it("only treats live games as busy, whatever the app reports", async () => {
     const alex = await new TestClient("alex", "Alex").open();
     const sam = await new TestClient("sam", "Sam").open();
-    sam.send({ type: "presence", windowOpen: true, activity: "game" });
+    sam.send({ type: "presence", windowOpen: true, activity: "game", mic: null });
     const { players } = await alex.next("players", (m) => m.players.some((p) => p.id === "sam" && p.windowOpen));
     expect(players.find((p) => p.id === "sam")?.activity).toBe("idle");
     alex.close();

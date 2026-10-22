@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { Side } from "../shared/chess/game";
+import type { MicState, PlayerPresence } from "../shared/protocol";
 import { ONE_MIN, TEN_MIN, formatTimeControl } from "../shared/timeControl";
 import { Modal } from "./components/common";
 import { connection } from "./net/connection";
@@ -43,9 +44,9 @@ export function App() {
     const unlock = () => unlockAudio();
     window.addEventListener("pointerdown", unlock, { once: true });
     window.addEventListener("keydown", unlock, { once: true });
-    // Tell the hub when a game against the computer starts or ends.
+    // Tell the hub when a game against the computer starts or ends, or the mic changes.
     const unsub = useStore.subscribe((s, prev) => {
-      if (s.botGameLive !== prev.botGameLive) connection.sendPresence();
+      if (s.botGameLive !== prev.botGameLive || s.mic !== prev.mic) connection.sendPresence();
     });
     return () => {
       offs.forEach((off) => off());
@@ -119,7 +120,7 @@ function TopBar({ screen }: { screen: Screen }) {
         )}
       </nav>
       <div className="topbar-right">
-        <VoicePill opponentName={opp?.name} />
+        <VoicePill opp={opp} />
         <span className={`conn-pill ${linked ? "connected" : ""}`} data-conn={s.conn} title={s.hub?.host}>
           <span className="dot" /> {connText}
         </span>
@@ -128,21 +129,46 @@ function TopBar({ screen }: { screen: Screen }) {
   );
 }
 
-function VoicePill({ opponentName }: { opponentName?: string }) {
+const MY_MIC_PROBLEM: Partial<Record<MicState, string>> = {
+  blocked: "Your mic is blocked",
+  missing: "No microphone found",
+  failed: "Your mic isn't working",
+};
+
+function theirMicProblem(name: string, mic: MicState | null): string | null {
+  if (mic === "muted") return `${name} is muted`;
+  if (mic === "blocked") return `${name}'s mic is blocked`;
+  if (mic === "missing") return `${name} has no microphone`;
+  if (mic === "failed") return `${name}'s mic isn't working`;
+  return null;
+}
+
+const MIC_SETTINGS_HINT =
+  platform.platform === "darwin"
+    ? "Allow ChessLAN in System Settings → Privacy & Security → Microphone"
+    : "Allow desktop apps in Windows Settings → Privacy & security → Microphone";
+
+function VoicePill({ opp }: { opp: PlayerPresence | null }) {
   const status = useStore((s) => s.voice);
   const muted = useStore((s) => s.prefs.micMuted);
   const talking = useStore((s) => s.remoteTalking);
+  const mic = useStore((s) => s.mic);
   if (status === "off") return null;
-  const label =
-    status === "connected"
-      ? `Voice with ${opponentName ?? "opponent"}`
-      : status === "connecting"
-        ? "Voice connecting…"
-        : status === "no-mic"
-          ? "No microphone"
-          : `Voice starts when ${opponentName ?? "they"} open${opponentName ? "s" : ""} the app`;
+  const name = opp?.name ?? "your opponent";
+  const inCall = status === "connected" || status === "no-mic";
+  // During a call, say what's wrong on either side, or just who it's with.
+  const problems = inCall ? [mic && MY_MIC_PROBLEM[mic], theirMicProblem(name, opp?.mic ?? null)].filter(Boolean) : [];
+  const label = inCall
+    ? problems.join(" · ") || `Voice with ${name}`
+    : status === "connecting"
+      ? "Voice connecting…"
+      : `Voice starts when ${opp ? `${opp.name} opens` : "they open"} the app`;
   return (
-    <div className={`voice-pill ${status} ${talking ? "talking" : ""}`} data-testid="voice">
+    <div
+      className={`voice-pill ${status} ${talking ? "talking" : ""} ${problems.length ? "warn" : ""}`}
+      data-testid="voice"
+      title={mic === "blocked" ? MIC_SETTINGS_HINT : undefined}
+    >
       <span className="voice-label">{label}</span>
       {(status === "connected" || status === "connecting") && (
         <button
@@ -163,7 +189,14 @@ function VoicePill({ opponentName }: { opponentName?: string }) {
 
 function IncomingChallenge() {
   const challenges = useStore((s) => s.challenges);
+  const visible = useStore((s) => s.windowVisible);
   const ch = challenges.find((c) => c.to.id === myId());
+  // Tell the challenger it's on screen. The hub forgets that if we drop off,
+  // so this goes again after a reconnect.
+  const unconfirmed = ch && !ch.shownAt ? ch.id : null;
+  useEffect(() => {
+    if (unconfirmed && visible) connection.send({ type: "challengeShown", id: unconfirmed });
+  }, [unconfirmed, visible]);
   if (!ch) return null;
   const mine: Side | "random" = ch.color === "white" ? "b" : ch.color === "black" ? "w" : "random";
   const respond = (accept: boolean) => {

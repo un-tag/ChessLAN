@@ -95,7 +95,7 @@ test("a dropped player can come back to the same game", async ({ alex, sam }) =>
 test("declined challenges tell the challenger", async ({ alex, sam }) => {
   await expect(alex.page.getByText("Sam is here")).toBeVisible();
   await alex.page.getByTestId("play-1").click();
-  await expect(alex.page.getByText("Waiting for Sam to accept")).toBeVisible();
+  await expect(alex.page.getByTestId("challenge-status")).toContainText("On Sam's screen — waiting for an answer");
   await sam.page.getByTestId("decline").click();
   await expect(alex.page.getByText("Sam declined your challenge")).toBeVisible();
   await expect(alex.page.getByTestId("play-1")).toBeEnabled();
@@ -146,7 +146,7 @@ test("the result card can start a different game", async ({ alex, sam }) => {
   const [white, black] = await startGame(alex, sam, "play-1");
   await play(white, black, ["f2f3", "e7e5", "g2g4", "d8h4"]);
   await white.page.getByTestId("game-over").getByRole("button", { name: "10 min" }).click();
-  await expect(white.page.getByTestId("game-over")).toContainText(`Waiting for ${black.name}`);
+  await expect(white.page.getByTestId("game-over")).toContainText(`On ${black.name}'s screen`);
   await black.page.getByTestId("accept").click();
   await expect(black.page.getByText("10 min · Rated Rapid")).toBeVisible();
 });
@@ -154,10 +154,13 @@ test("the result card can start a different game", async ({ alex, sam }) => {
 test("a challenge waits for an app that isn't running and pops up when it opens", async ({ alex, sam }) => {
   await expect(alex.page.getByText("Sam is here")).toBeVisible();
   await sam.close();
-  await expect(alex.page.getByText("Sam's app isn't running")).toBeVisible();
+  await expect(alex.page.getByText("Can't reach Sam's app")).toBeVisible();
   await alex.page.getByTestId("play-1").click();
-  await expect(alex.page.getByText("Sam will see it when ChessLAN opens")).toBeVisible();
+  await expect(alex.page.getByTestId("challenge-status")).toContainText("It'll pop up when Sam's app is back");
   await sam.open();
+  // Sam's app confirms the popup is up, and Alex sees that.
+  await expect(sam.page.getByTestId("accept")).toBeVisible();
+  await expect(alex.page.getByTestId("challenge-status")).toContainText("On Sam's screen");
   await sam.page.getByTestId("accept").click();
   await expect(alex.page.getByRole("grid", { name: "Chess board" })).toBeVisible();
 });

@@ -11,8 +11,11 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { Side } from "../shared/chess/game";
 import {
   CHALLENGE_TTL_MS,
+  HEARTBEAT_MS,
   HUB_PORT,
+  MIC_STATES,
   PROTOCOL,
+  SILENT_MS,
   type Activity,
   type Challenge,
   type ChatMessage,
@@ -20,6 +23,7 @@ import {
   type GameRecord,
   type HelloInfo,
   type KnownPlayer,
+  type MicState,
   type PeerMessage,
   type PlayerPresence,
   type PlayerRef,
@@ -42,6 +46,9 @@ export interface HubOptions {
   updatesDir?: string;
   clock?: Clock;
   log?: (msg: string) => void;
+  /** Liveness timing (real time, not `clock`); tests shorten it. */
+  heartbeatMs?: number;
+  silentMs?: number;
 }
 
 export interface Hub {
@@ -95,6 +102,7 @@ interface Conn {
   player?: PlayerRef;
   windowOpen: boolean;
   activity: Activity;
+  mic: MicState | null;
   rtt: number;
   local: boolean;
 }
@@ -146,6 +154,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         online: !!c,
         windowOpen: c?.windowOpen ?? false,
         activity: activeSessionOf(p.id) ? "game" : (c?.activity ?? "idle"),
+        mic: c?.mic ?? null,
       };
     });
   const broadcastPlayers = (): void => broadcast({ type: "players", players: presence() });
@@ -256,6 +265,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         conn.windowOpen = !!msg.windowOpen;
         // Only live hub games count as "in a game"; a result screen doesn't.
         conn.activity = msg.activity === "bot" ? "bot" : "idle";
+        conn.mic = MIC_STATES.includes(msg.mic as MicState) ? (msg.mic as MicState) : null;
         return broadcastPlayers();
       case "ping":
         if (typeof msg.rtt === "number" && msg.rtt >= 0) conn.rtt = conn.rtt ? conn.rtt * 0.7 + msg.rtt * 0.3 : msg.rtt;
@@ -300,6 +310,12 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       case "challengeCancel": {
         const ch = challenges.get(msg.id);
         if (ch && ch.from.id === me.id) removeChallenge(ch.id);
+        return sendChallenges();
+      }
+      case "challengeShown": {
+        const ch = challenges.get(msg.id);
+        if (!ch || ch.to.id !== me.id || ch.shownAt) return;
+        ch.shownAt = clock.now();
         return sendChallenges();
       }
       case "challengeRespond": {
@@ -423,7 +439,11 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     const p = conn.player;
     if (closing || !p || conns.get(p.id) !== conn) return;
     conns.delete(p.id);
-    for (const ch of [...challenges.values()]) if (ch.from.id === p.id) removeChallenge(ch.id);
+    for (const ch of [...challenges.values()]) {
+      if (ch.from.id === p.id) removeChallenge(ch.id);
+      // Their popup is gone with the app; it has to show again.
+      else if (ch.to.id === p.id) delete ch.shownAt;
+    }
     activeSessionOf(p.id)?.playerLeft(p.id);
     sendChallenges();
     broadcastPlayers();
@@ -498,6 +518,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   const attachPeer = (ws: WebSocket): void => {
     const link: PeerLink = { ws, nodeId: null };
     peerLinks.add(link);
+    watch(ws);
     ws.on("message", (data) => {
       try {
         handlePeer(link, JSON.parse(String(data)) as PeerMessage);
@@ -536,6 +557,31 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   }
 
   const hasLiveGame = (): boolean => [...sessions.values()].some((s) => !s.over);
+
+  // ---- Liveness ----
+  // A computer that sleeps or drops off the Wi-Fi doesn't close its sockets,
+  // and TCP can take many minutes to notice. So ping every socket and drop
+  // the ones that go quiet: that's what marks a player away within seconds.
+  // (Browsers and ws answer pings by themselves.)
+
+  const heard = new WeakMap<WebSocket, number>();
+  const watch = (ws: WebSocket): void => {
+    const alive = () => heard.set(ws, Date.now());
+    alive();
+    ws.on("pong", alive);
+    ws.on("message", alive);
+  };
+  const silentMs = opts.silentMs ?? SILENT_MS;
+  const heartbeat = setInterval(() => {
+    const now = Date.now();
+    const sockets = new Set([...wss.clients, ...[...peerLinks].map((l) => l.ws)]);
+    for (const ws of sockets) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      if (now - (heard.get(ws) ?? now) > silentMs) ws.terminate();
+      else ws.ping();
+    }
+  }, opts.heartbeatMs ?? HEARTBEAT_MS);
+  heartbeat.unref?.();
 
   // ---- HTTP ----
 
@@ -610,6 +656,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       ws,
       windowOpen: false,
       activity: "idle",
+      mic: null,
       rtt: 0,
       local: addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1",
     };
@@ -627,6 +674,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         send(conn, { type: "error", message: "Hub error" });
       }
     });
+    watch(ws);
     ws.on("close", () => onClose(conn));
     ws.on("error", () => ws.close());
   });
@@ -649,6 +697,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     hasLiveGame,
     close: async () => {
       closing = true;
+      clearInterval(heartbeat);
       unlink();
       for (const s of sessions.values()) s.dispose();
       for (const t of challengeTimers.values()) clock.clearTimeout(t);

@@ -18,7 +18,7 @@ import { connection } from "../net/connection";
 import { platform } from "../platform";
 import { moveSound, sounds } from "../sound";
 import { myId, navigate, serverNow, useStore } from "../state/store";
-import { AdvancedModal, sendChallenge } from "./Home";
+import { AdvancedModal, challengeStatus, sendChallenge } from "./Home";
 import { reasonText, resultFor } from "./results";
 
 export function GameScreen() {
@@ -382,6 +382,7 @@ function GameOver({ view, mySide, oppName }: { view: GameView; mySide: Side; opp
   const [hidden, setHidden] = useState(false);
   const [advanced, setAdvanced] = useState(false);
   const outgoing = useStore((s) => s.challenges.find((c) => c.from.id === myId()));
+  const players = useStore((s) => s.players);
   const send = connection.send.bind(connection);
   const outcome = resultFor(view.result, mySide);
   const change = view.ratingChange?.[mySide];
@@ -424,8 +425,8 @@ function GameOver({ view, mySide, oppName }: { view: GameView; mySide: Side; opp
           )}
           {outgoing ? (
             <div className="row waiting-inline">
-              <span className="muted small">
-                Waiting for {oppName} · {formatTimeControl(outgoing.tc)}
+              <span className="muted small" data-testid="challenge-status">
+                {challengeStatus(outgoing, players)} · {formatTimeControl(outgoing.tc)}
               </span>
               <button className="btn small" onClick={() => send({ type: "challengeCancel", id: outgoing.id })}>
                 Cancel

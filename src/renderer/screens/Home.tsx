@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ChallengeSpec, ColorChoice, PlayerPresence } from "../../shared/protocol";
+import type { Challenge, ChallengeSpec, ColorChoice, PlayerPresence } from "../../shared/protocol";
 import { computeRatings, headToHead, ratingsFor } from "../../shared/ratings";
 import {
   ONE_MIN,
@@ -75,11 +75,8 @@ export function Home() {
             {outgoing ? (
               <div className="waiting">
                 <div className="spinner" />
-                <span>
-                  {opp?.online
-                    ? `Waiting for ${outgoing.to.name} to accept`
-                    : `${outgoing.to.name} will see it when ChessLAN opens`}{" "}
-                  · {formatTimeControl(outgoing.tc)}
+                <span data-testid="challenge-status">
+                  {challengeStatus(outgoing, s.players)} · {formatTimeControl(outgoing.tc)}
                 </span>
                 <button className="btn" onClick={() => connection.send({ type: "challengeCancel", id: outgoing.id })}>
                   Cancel
@@ -224,9 +221,19 @@ function FirstConnectHint() {
   );
 }
 
+/** Where our pending challenge is: waiting for their app, sent, or on their screen. */
+export function challengeStatus(ch: Challenge, players: PlayerPresence[]): string {
+  const name = ch.to.name;
+  if (!players.find((p) => p.id === ch.to.id)?.online) return `It'll pop up when ${name}'s app is back`;
+  if (!ch.shownAt) return `Sending to ${name}…`;
+  return `On ${name}'s screen — waiting for an answer`;
+}
+
 function OpponentStatus({ opp }: { opp: PlayerPresence }) {
+  // Away can mean the app is closed or the computer is asleep or off the
+  // Wi-Fi: this side can't tell which, so it doesn't say.
   const status = !opp.online
-    ? { dot: "off", text: `${opp.name}'s app isn't running — a challenge will wait for it` }
+    ? { dot: "off", text: `Can't reach ${opp.name}'s app — a challenge will wait for it` }
     : opp.activity === "game"
       ? { dot: "busy", text: `${opp.name} is in a game` }
       : opp.activity === "bot"

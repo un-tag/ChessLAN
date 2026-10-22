@@ -8,6 +8,7 @@
 // offer collisions. Messages for an old session (from before a reload or
 // reconnect) are dropped, and a hello from a new peer session restarts the
 // call cleanly.
+import type { MicState } from "../shared/protocol";
 import { connection } from "./net/connection";
 import { get, myId, opponent, set } from "./state/store";
 
@@ -20,6 +21,18 @@ interface Signal {
 }
 
 const randomSid = (): string => Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+/** Why the microphone can't be used, from getUserMedia's error. */
+function micProblem(e: unknown): MicState {
+  const name = (e as { name?: unknown } | null)?.name;
+  if (name === "NotAllowedError" || name === "SecurityError") return "blocked";
+  if (name === "NotFoundError" || name === "OverconstrainedError") return "missing";
+  return "failed"; // e.g. NotReadableError: in use, or the OS refused to start it
+}
+
+const setMic = (mic: MicState | null): void => {
+  if (get().mic !== mic) set({ mic });
+};
 
 class Voice {
   private pc: RTCPeerConnection | null = null;
@@ -50,6 +63,7 @@ class Voice {
 
   setMuted(muted: boolean): void {
     for (const t of this.mic?.getAudioTracks() ?? []) t.enabled = !muted;
+    if (this.mic) setMic(muted ? "muted" : "on");
   }
 
   private get isOfferer(): boolean {
@@ -59,19 +73,28 @@ class Voice {
   private async getMic(): Promise<MediaStream | null> {
     if (this.mic?.active) return this.mic;
     try {
-      this.mic = await navigator.mediaDevices.getUserMedia({
+      const mic = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
-    } catch {
+      this.mic = mic;
+      // Unplugged, or taken away by the OS mid-call.
+      for (const t of mic.getAudioTracks()) t.onended = () => this.mic === mic && setMic("failed");
+      this.setMuted(get().prefs.micMuted);
+    } catch (e) {
       this.mic = null;
+      setMic(micProblem(e));
     }
     return this.mic;
   }
 
   private releaseMic(): void {
     // Stopping the tracks turns the OS microphone indicator off.
-    for (const t of this.mic?.getTracks() ?? []) t.stop();
+    for (const t of this.mic?.getTracks() ?? []) {
+      t.onended = null;
+      t.stop();
+    }
     this.mic = null;
+    setMic(null);
   }
 
   /** Fresh peer connection. `offerTo`: offer straight away to that answerer session. */
@@ -91,7 +114,6 @@ class Voice {
     this.remoteSid = opts.offerTo ?? null;
     this.queuedCandidates = [];
     if (mic) {
-      this.setMuted(get().prefs.micMuted);
       for (const track of mic.getAudioTracks()) pc.addTrack(track, mic);
     } else {
       pc.addTransceiver("audio", { direction: "recvonly" });

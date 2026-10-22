@@ -93,9 +93,14 @@ had left.
     seeing each other.
   - As a last resort, each app shows its own address in Settings → This
     computer; type one computer's address into the other's Settings.
-- **No voice:** check the microphone permission (macOS: System Settings →
-  Privacy & Security → Microphone; Windows: Settings → Privacy →
-  Microphone).
+- **"Can't reach …'s app":** the other app is closed, or that computer is
+  asleep or off the Wi-Fi. It shows within about 8 seconds; a challenge sent
+  meanwhile pops up once the app is back.
+- **No voice:** the voice pill says whose mic is the problem ("Your mic is
+  blocked", "Sam has no microphone", "Sam is muted"). For a blocked mic,
+  allow ChessLAN under macOS System Settings → Privacy & Security →
+  Microphone, or on Windows under Settings → Privacy & security → Microphone
+  (with "Let desktop apps access your microphone" on).
 - **Where the data lives:** each computer has a full copy in ChessLAN's
   `hub` folder (`~/Library/Application Support/ChessLAN/hub/` on the Mac,
   `%APPDATA%\ChessLAN\hub\` on Windows). `games.jsonl` holds the history
