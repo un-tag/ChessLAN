@@ -1,11 +1,13 @@
-// The hub runs on the host Mac and is the single source of truth: it relays
-// challenges, runs every game session, keeps chat and the game log, relays
-// WebRTC signalling for voice and serves Windows update files.
+// Every ChessLAN app runs a hub. It keeps that computer's full copy of the
+// game log, chat and known players, and syncs them with the other peer's hub
+// over /peer. The hub elected referee also runs live games: it relays
+// challenges, runs game sessions and relays WebRTC signalling for voice.
+// The Mac's hub additionally serves the Windows update files.
 import { createReadStream, existsSync, statSync } from "node:fs";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, request, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import type { Side } from "../shared/chess/game";
 import {
   CHALLENGE_TTL_MS,
@@ -13,8 +15,12 @@ import {
   PROTOCOL,
   type Activity,
   type Challenge,
+  type ChatMessage,
   type ClientMessage,
   type GameRecord,
+  type HelloInfo,
+  type KnownPlayer,
+  type PeerMessage,
   type PlayerPresence,
   type PlayerRef,
   type ServerMessage,
@@ -40,9 +46,48 @@ export interface HubOptions {
 
 export interface Hub {
   port: number;
+  /** This peer's stable id (also used for the referee election). */
   hubId: string;
   store: Store;
+  /** Keep an outbound sync link to another peer's hub ("host:port"). */
+  linkTo(host: string): void;
+  unlink(): void;
+  /** The host we're linked to over an open outbound link, if any. */
+  linkedTo(): string | null;
+  hasLiveGame(): boolean;
   close(): Promise<void>;
+}
+
+interface PeerLink {
+  ws: WebSocket;
+  nodeId: string | null;
+}
+
+const PEER_BATCH = 200;
+const PEER_MAX_PAYLOAD = 32 * 1024 * 1024;
+
+/** GET http://host/hello, or null if it isn't a ChessLAN hub. */
+export function fetchHello(host: string, timeoutMs = 1500): Promise<HelloInfo | null> {
+  return new Promise((resolve) => {
+    const m = /^(.+?)(?::(\d+))?$/.exec(host);
+    if (!m) return resolve(null);
+    const req = request({ host: m[1], port: Number(m[2] ?? HUB_PORT), path: "/hello", timeout: timeoutMs }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (c) => (body += c));
+      res.on("end", () => {
+        try {
+          const info = JSON.parse(body) as HelloInfo;
+          resolve(info.app === "chesslan" ? info : null);
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.on("timeout", () => req.destroy());
+    req.on("error", () => resolve(null));
+    req.end();
+  });
 }
 
 interface Conn {
@@ -101,7 +146,6 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         online: !!c,
         windowOpen: c?.windowOpen ?? false,
         activity: activeSessionOf(p.id) ? "game" : (c?.activity ?? "idle"),
-        isHost: c?.local ?? false,
       };
     });
   const broadcastPlayers = (): void => broadcast({ type: "players", players: presence() });
@@ -148,6 +192,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       const change = computeRatings(store.records).changes.get(record.id);
       if (change) s.ratingChange = change;
       broadcast({ type: "record", record });
+      toPeers(null, { type: "records", records: [record] });
     }
   };
 
@@ -305,6 +350,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         if (!text) return;
         const message = { id: randomUUID(), from: me, text, at: clock.now() };
         store.addChat(message);
+        toPeers(null, { type: "chat", messages: [message] });
         return broadcast({ type: "chat", message });
       }
       case "rtc":
@@ -319,7 +365,10 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
           Array.isArray(r.moves);
         if (!valid) return send(conn, { type: "error", message: "Bad record" });
         const record = { ...r, rated: false };
-        if (store.addRecord(record)) broadcast({ type: "record", record });
+        if (store.addRecord(record)) {
+          broadcast({ type: "record", record });
+          toPeers(null, { type: "records", records: [record] });
+        }
         return;
       }
       default:
@@ -345,6 +394,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     conn.player = { id, name };
     conns.set(id, conn);
     store.touchPlayer(conn.player);
+    toPeers(null, { type: "players", players: [...store.players.values()] });
     send(conn, {
       type: "welcome",
       you: id,
@@ -380,6 +430,113 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     log(`${p.name} disconnected`);
   };
 
+  // ---- Peer sync ----
+  // Both ends of a link send their ids; each replies with what the other is
+  // missing, then new records, chat and players are pushed as they happen.
+
+  const peerLinks = new Set<PeerLink>();
+  let outbound: { host: string; ws: WebSocket } | null = null;
+
+  const sendPeer = (link: PeerLink, msg: PeerMessage): void => {
+    if (link.ws.readyState === WebSocket.OPEN) link.ws.send(JSON.stringify(msg));
+  };
+  function toPeers(except: PeerLink | null, msg: PeerMessage): void {
+    for (const link of peerLinks) if (link !== except) sendPeer(link, msg);
+  }
+
+  const isRecord = (r: GameRecord): boolean =>
+    !!r && typeof r.id === "string" && Array.isArray(r.moves) && !!r.white?.id && !!r.black?.id && typeof r.endedAt === "number";
+
+  const ingestRecords = (from: PeerLink, records: GameRecord[]): void => {
+    const fresh = (records ?? []).filter((r) => isRecord(r) && store.addRecord(r));
+    if (!fresh.length) return;
+    if (fresh.length > 20) broadcast({ type: "history", records: store.records });
+    else for (const record of fresh) broadcast({ type: "record", record });
+    toPeers(from, { type: "records", records: fresh });
+  };
+
+  const ingestChat = (from: PeerLink, messages: ChatMessage[]): void => {
+    const fresh = store.addChat(...(messages ?? []));
+    if (!fresh.length) return;
+    if (fresh.length > 20) broadcast({ type: "chatHistory", messages: store.chat });
+    else for (const message of fresh) broadcast({ type: "chat", message });
+    toPeers(from, { type: "chat", messages: fresh });
+  };
+
+  const ingestPlayers = (from: PeerLink, players: KnownPlayer[]): void => {
+    if (!store.mergePlayers(players ?? [])) return;
+    broadcastPlayers();
+    toPeers(from, { type: "players", players: [...store.players.values()] });
+  };
+
+  const handlePeer = (link: PeerLink, msg: PeerMessage): void => {
+    switch (msg.type) {
+      case "peerHello":
+        if (msg.protocol !== PROTOCOL || msg.nodeId === store.meta.hubId) return link.ws.close();
+        link.nodeId = msg.nodeId;
+        return;
+      case "have": {
+        const theirs = new Set(msg.records ?? []);
+        const missing = store.records.filter((r) => !theirs.has(r.id));
+        for (let i = 0; i < missing.length; i += PEER_BATCH) {
+          sendPeer(link, { type: "records", records: missing.slice(i, i + PEER_BATCH) });
+        }
+        const theirChat = new Set(msg.chat ?? []);
+        const chat = store.chat.filter((m) => !theirChat.has(m.id));
+        if (chat.length) sendPeer(link, { type: "chat", messages: chat });
+        return ingestPlayers(link, msg.players);
+      }
+      case "records":
+        return ingestRecords(link, msg.records);
+      case "chat":
+        return ingestChat(link, msg.messages);
+      case "players":
+        return ingestPlayers(link, msg.players);
+    }
+  };
+
+  const attachPeer = (ws: WebSocket): void => {
+    const link: PeerLink = { ws, nodeId: null };
+    peerLinks.add(link);
+    ws.on("message", (data) => {
+      try {
+        handlePeer(link, JSON.parse(String(data)) as PeerMessage);
+      } catch (e) {
+        log(`bad peer message: ${(e as Error).message}`);
+      }
+    });
+    ws.on("close", () => peerLinks.delete(link));
+    ws.on("error", () => ws.close());
+    sendPeer(link, { type: "peerHello", nodeId: store.meta.hubId, protocol: PROTOCOL });
+    sendPeer(link, {
+      type: "have",
+      records: store.recordIds,
+      chat: store.chatIdList,
+      players: [...store.players.values()],
+    });
+  };
+
+  const linkTo = (host: string): void => {
+    if (outbound?.host === host && outbound.ws.readyState <= WebSocket.OPEN) return;
+    unlink();
+    const ws = new WebSocket(`ws://${host}/peer`, { maxPayload: PEER_MAX_PAYLOAD, handshakeTimeout: 3000 });
+    outbound = { host, ws };
+    ws.on("open", () => attachPeer(ws));
+    ws.on("error", () => {});
+    ws.on("close", () => {
+      if (outbound?.ws === ws) outbound = null;
+    });
+    log(`linking to peer ${host}`);
+  };
+
+  function unlink(): void {
+    const ws = outbound?.ws;
+    outbound = null;
+    ws?.close();
+  }
+
+  const hasLiveGame = (): boolean => [...sessions.values()].some((s) => !s.over);
+
   // ---- HTTP ----
 
   const serveFile = (res: ServerResponse, file: string): void => {
@@ -403,16 +560,28 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://hub");
     if (url.pathname === "/hello") {
+      const info: HelloInfo & { hubId: string } = {
+        app: "chesslan",
+        protocol: PROTOCOL,
+        version: opts.appVersion,
+        nodeId: store.meta.hubId,
+        hubId: store.meta.hubId, // read by 3.0.x apps
+        hostName: opts.hostName ?? "ChessLAN",
+        liveGame: hasLiveGame(),
+        winUpdates: winUpdateAvailable(),
+      };
       res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
-      res.end(
-        JSON.stringify({
-          app: "chesslan",
-          protocol: PROTOCOL,
-          version: opts.appVersion,
-          hubId: store.meta.hubId,
-          hostName: opts.hostName ?? "Host",
-        }),
-      );
+      res.end(JSON.stringify(info));
+      return;
+    }
+    if (url.pathname === "/reach") {
+      // "Can you reach me?": lets a peer learn whether connections work both ways.
+      const addr = url.searchParams.get("addr") ?? "";
+      if (!/^[\w.-]+:\d+$/.test(addr)) return void res.writeHead(400).end();
+      void fetchHello(addr).then((info) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: !!info, nodeId: info?.nodeId ?? null }));
+      });
       return;
     }
     if (url.pathname.startsWith("/updates/win/") && opts.updatesDir) {
@@ -427,11 +596,15 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     res.writeHead(404).end("Not found");
   });
 
-  const wss = new WebSocketServer({ server, path: "/ws", maxPayload: 256 * 1024 });
-  // The WebSocket server re-emits HTTP server errors (e.g. port in use);
-  // those are reported through the listen promise below instead.
-  wss.on("error", () => {});
-  wss.on("connection", (ws, req) => {
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
+  const peerWss = new WebSocketServer({ noServer: true, maxPayload: PEER_MAX_PAYLOAD });
+  server.on("upgrade", (req, socket, head) => {
+    const path = new URL(req.url ?? "/", "http://hub").pathname;
+    if (path === "/ws") wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+    else if (path === "/peer") peerWss.handleUpgrade(req, socket, head, (ws) => attachPeer(ws));
+    else socket.destroy();
+  });
+  wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     const addr = req.socket.remoteAddress ?? "";
     const conn: Conn = {
       ws,
@@ -470,12 +643,19 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     port,
     hubId: store.meta.hubId,
     store,
+    linkTo,
+    unlink,
+    linkedTo: () => (outbound?.ws.readyState === WebSocket.OPEN ? outbound.host : null),
+    hasLiveGame,
     close: async () => {
       closing = true;
+      unlink();
       for (const s of sessions.values()) s.dispose();
       for (const t of challengeTimers.values()) clock.clearTimeout(t);
-      for (const c of wss.clients) c.terminate();
+      for (const c of [...wss.clients, ...peerWss.clients]) c.terminate();
+      for (const link of peerLinks) link.ws.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => peerWss.close(() => resolve()));
       const closed = new Promise<void>((resolve) => server.close(() => resolve()));
       // Idle keep-alive HTTP connections would otherwise hold close() open.
       server.closeAllConnections();

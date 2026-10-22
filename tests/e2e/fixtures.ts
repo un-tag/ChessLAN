@@ -27,7 +27,7 @@ async function makePlayer(browser: Browser, url: string, id: string, name: strin
       if (player.page.isClosed()) player.page = await context.newPage();
       player.page.on("pageerror", (e) => console.log(`[${name}] page error: ${e.message}`));
       await player.page.goto(`${url}/?id=${id}&name=${name}`);
-      await expect(player.page.locator(".conn-pill.connected")).toBeVisible();
+      await expect(player.page.locator('[data-conn="connected"]')).toBeVisible();
     },
     async close() {
       await player.page.close();

@@ -1,39 +1,13 @@
-// Finds the host on the LAN using outbound TCP only, so the Windows
-// firewall never asks for permission: try the remembered/manual address,
+// Finding other ChessLAN apps on the LAN: try remembered/manual addresses,
 // then probe port 47800 across each local IPv4 subnet and confirm with
-// GET /hello.
-import { request } from "node:http";
+// GET /hello. Everything here is outbound TCP.
 import { networkInterfaces } from "node:os";
-import { HUB_PORT } from "../shared/protocol";
+import { fetchHello } from "../hub/hub";
+import { HUB_PORT, type HelloInfo } from "../shared/protocol";
 
-export interface HelloInfo {
-  app: string;
-  protocol: number;
-  version: string;
-  hubId: string;
-  hostName: string;
-}
-
-export function probe(host: string, timeoutMs = 700): Promise<HelloInfo | null> {
-  return new Promise((resolve) => {
-    const [hostname, port] = splitHost(host);
-    const req = request({ host: hostname, port, path: "/hello", method: "GET", timeout: timeoutMs }, (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (c) => (body += c));
-      res.on("end", () => {
-        try {
-          const info = JSON.parse(body) as HelloInfo;
-          resolve(info.app === "chesslan" ? info : null);
-        } catch {
-          resolve(null);
-        }
-      });
-    });
-    req.on("timeout", () => req.destroy());
-    req.on("error", () => resolve(null));
-    req.end();
-  });
+export interface Found {
+  host: string; // "ip:port"
+  info: HelloInfo;
 }
 
 /** "192.168.1.20" or "mac.local:47800" → [host, port]. */
@@ -74,27 +48,45 @@ export function localAddresses(): string[] {
     .map((ni) => ni!.address);
 }
 
-/** Probes many hosts with bounded concurrency; resolves on the first hub found. */
-async function scan(hosts: string[], concurrency = 96, timeoutMs = 450): Promise<string | null> {
+/** Our address as the given peer would reach it: the local IP sharing the most leading octets. */
+export function addressFacing(peerHost: string): string {
+  const [ip] = splitHost(peerHost);
+  if (ip === "127.0.0.1" || ip === "localhost") return "127.0.0.1";
+  const target = ip.split(".");
+  let best = localAddresses()[0] ?? "127.0.0.1";
+  let bestScore = -1;
+  for (const a of localAddresses()) {
+    const parts = a.split(".");
+    let score = 0;
+    while (score < 4 && parts[score] === target[score]) score++;
+    if (score > bestScore) [best, bestScore] = [a, score];
+  }
+  return best;
+}
+
+/** Probes many hosts with bounded concurrency; resolves on the first other ChessLAN app found. */
+async function scan(hosts: string[], selfId: string, concurrency = 96, timeoutMs = 450): Promise<Found | null> {
   let index = 0;
-  let found: string | null = null;
+  let found: Found | null = null;
   const worker = async () => {
     while (!found && index < hosts.length) {
-      const host = `${hosts[index++]}:${HUB_PORT}`;
-      const info = await probe(host, timeoutMs);
-      // A hub on another version still counts: connecting lets this app update.
-      if (info && !found) found = host;
+      const host = hosts[index++];
+      const info = await fetchHello(host, timeoutMs);
+      if (info && info.nodeId !== selfId && !found) found = { host, info };
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, hosts.length) }, worker));
   return found;
 }
 
-export async function discoverHub(preferred: (string | null)[]): Promise<string | null> {
-  for (const host of preferred) {
-    if (!host) continue;
-    const withPort = splitHost(host).join(":");
-    if (await probe(withPort)) return withPort;
+/** Looks for another ChessLAN app: preferred addresses first, then (optionally) the subnet. */
+export async function findPeer(preferred: (string | null | undefined)[], selfId: string, scanSubnet: boolean): Promise<Found | null> {
+  for (const raw of preferred) {
+    if (!raw) continue;
+    const host = splitHost(raw).join(":");
+    const info = await fetchHello(host, 700);
+    if (info && info.nodeId !== selfId) return { host, info };
   }
-  return scan(subnetCandidates());
+  if (!scanSubnet) return null;
+  return scan(subnetCandidates().map((ip) => `${ip}:${HUB_PORT}`), selfId);
 }

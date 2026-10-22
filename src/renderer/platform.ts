@@ -20,7 +20,7 @@ function webBridge(): DesktopBridge {
     } catch {
       // Storage unavailable: run with defaults.
     }
-    const config: AppConfig = { player: null, role: "join", hubAddress: null, startAtLogin: false, ...stored };
+    const config: AppConfig = { player: null, peerAddress: null, startAtLogin: false, ...stored };
     // Tests and dev can preset the player: ?id=alex&name=Alex
     if (params.get("id") && params.get("name")) config.player = { id: params.get("id")!, name: params.get("name")! };
     return config;
@@ -43,6 +43,7 @@ function webBridge(): DesktopBridge {
       const host = params.get("hub") ?? (location.port ? location.host : `${location.hostname}:${HUB_PORT}`);
       return { url: `ws://${host}/ws`, host };
     },
+    onHubChanged: noop,
     getLocalAddresses: async () => [location.hostname],
     isVisible: async () => true,
     onVisibility: noop,

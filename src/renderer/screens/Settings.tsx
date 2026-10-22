@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import type { AppConfig, Role } from "../../shared/bridge";
+import type { AppConfig } from "../../shared/bridge";
 import { Toggle } from "../components/common";
 import { connection } from "../net/connection";
 import { isDesktop, platform } from "../platform";
 import { sounds } from "../sound";
-import { set, setPrefs, useStore, type Prefs } from "../state/store";
+import { opponent, set, setPrefs, useStore, type Prefs } from "../state/store";
 import { voice } from "../voice";
 
 const PROMOTION_CHOICES: [Prefs["promotion"], string][] = [
@@ -22,11 +22,12 @@ export function Settings() {
   const hub = useStore((s) => s.hub);
   const conn = useStore((s) => s.conn);
   const [name, setName] = useState(config?.player?.name ?? "");
-  const [address, setAddress] = useState(config?.hubAddress ?? "");
+  const [address, setAddress] = useState(config?.peerAddress ?? "");
   const [myAddresses, setMyAddresses] = useState<string[]>([]);
+  const opp = useStore((s) => opponent(s));
   useEffect(() => {
-    if (config?.role === "host") void platform.getLocalAddresses().then(setMyAddresses);
-  }, [config?.role]);
+    if (isDesktop) void platform.getLocalAddresses().then(setMyAddresses);
+  }, []);
 
   const saveConfig = async (patch: Partial<AppConfig>, reconnect = false) => {
     const next = await platform.setConfig(patch);
@@ -111,45 +112,31 @@ export function Settings() {
         <section className="card">
           <h3>This computer</h3>
           <Toggle label="Start ChessLAN when I log in" checked={config.startAtLogin} onChange={(v) => void saveConfig({ startAtLogin: v })} />
-          <div className="field-row">
-            <span>Role</span>
-            <div className="segmented">
-              {(["host", "join"] as Role[]).map((r) => (
-                <button key={r} className={config.role === r ? "selected" : ""} onClick={() => void saveConfig({ role: r }, true)}>
-                  {r === "host" ? "Host" : "Join"}
-                </button>
-              ))}
-            </div>
-          </div>
-          {config.role === "join" && (
-            <form
-              className="inline-form"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void saveConfig({ hubAddress: address.trim() || null }, true);
-              }}
-            >
-              <input
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="Host address (optional, e.g. 192.168.1.20)"
-                aria-label="Host address"
-              />
-              <button className="btn" type="submit">
-                Save
-              </button>
-            </form>
-          )}
-          {config.role === "host" ? (
-            <p className="muted small">
-              The other computer finds this one by itself. If it ever can't, enter this address there:{" "}
-              <b>{myAddresses.join(", ") || "…"}</b>
-            </p>
-          ) : (
-            <p className="muted small">
-              {conn === "connected" && hub ? `Connected to ${hub.hostName} (${hub.host})` : "Not connected"}
-            </p>
-          )}
+          <p className="muted small">
+            {conn === "connected" && opp?.online
+              ? `Linked with ${opp.name}'s app.`
+              : "The other app isn't around right now."}{" "}
+            The two apps find each other by themselves. This computer's address is{" "}
+            <b>{myAddresses.join(", ") || "…"}</b>; only if they ever can't find each other, enter the other
+            computer's address here:
+          </p>
+          <form
+            className="inline-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void saveConfig({ peerAddress: address.trim() || null });
+            }}
+          >
+            <input
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="Other computer's address (optional, e.g. 192.168.1.20)"
+              aria-label="Other computer's address"
+            />
+            <button className="btn" type="submit">
+              Save
+            </button>
+          </form>
         </section>
       )}
 
@@ -157,7 +144,7 @@ export function Settings() {
         <h3>About</h3>
         <p>
           ChessLAN {platform.appVersion}
-          {hub?.version && hub.version !== platform.appVersion && <span className="muted"> · host has {hub.version}</span>}
+          {hub?.version && hub.version !== platform.appVersion && <span className="muted"> · other app has {hub.version}</span>}
         </p>
         {isDesktop && (
           <p>

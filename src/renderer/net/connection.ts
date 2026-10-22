@@ -1,7 +1,10 @@
 // The single WebSocket to the hub: discovery, reconnects, clock sync and
 // dispatching server messages into the store.
 import {
+  CHALLENGE_TTL_MS,
   PROTOCOL,
+  type Challenge,
+  type ChallengeSpec,
   type ClientMessage,
   type GameRecord,
   type ServerMessage,
@@ -22,6 +25,9 @@ class Connection {
   private started = false;
   private bestRtt = Infinity;
   private listeners = new Set<Listener>();
+  // Our pending challenge, so it can be re-sent if we move to another hub
+  // (the other app turned up and became referee) before it was answered.
+  private outgoing: { to: string; spec: ChallengeSpec; at: number; seen: boolean } | null = null;
 
   start(): void {
     if (this.started) return;
@@ -37,6 +43,8 @@ class Connection {
 
   send(msg: ClientMessage): boolean {
     if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    if (msg.type === "challenge") this.outgoing = { to: msg.to, spec: msg.spec, at: Date.now(), seen: false };
+    if (msg.type === "challengeCancel") this.outgoing = null;
     this.ws.send(JSON.stringify(msg));
     return true;
   }
@@ -117,6 +125,24 @@ class Connection {
     this.sendPresence();
     this.startPing();
     flushPendingRecords();
+    const out = this.outgoing;
+    if (out && Date.now() - out.at < CHALLENGE_TTL_MS) {
+      out.seen = false;
+      this.ws?.send(JSON.stringify({ type: "challenge", to: out.to, spec: out.spec } satisfies ClientMessage));
+    } else {
+      this.outgoing = null;
+    }
+  }
+
+  /** Forget our pending challenge once it's gone from the hub (answered, expired). */
+  trackChallenges(list: Challenge[]): void {
+    if (!this.outgoing) return;
+    if (list.some((c) => c.from.id === myId())) this.outgoing.seen = true;
+    else if (this.outgoing.seen) this.outgoing = null;
+  }
+
+  challengeSettled(): void {
+    this.outgoing = null;
   }
 
   sendPresence(): void {
@@ -177,6 +203,7 @@ function handle(msg: ServerMessage): void {
     case "challenges": {
       const before = new Set(s.challenges.map((c) => c.id));
       set({ challenges: msg.challenges });
+      connection.trackChallenges(msg.challenges);
       const incoming = msg.challenges.find((c) => c.to.id === myId() && !before.has(c.id));
       if (incoming) {
         sounds.notify();
@@ -187,6 +214,7 @@ function handle(msg: ServerMessage): void {
       return;
     }
     case "challengeDeclined":
+      connection.challengeSettled();
       return toast(`${msg.by.name} declined your challenge`);
     case "game": {
       const g = msg.game;
@@ -196,6 +224,7 @@ function handle(msg: ServerMessage): void {
       if (s.game && s.game.id !== g.id && !s.game.over && g.over) return;
       const isNew = s.game?.id !== g.id;
       if (isNew && !g.over) {
+        connection.challengeSettled();
         // A new game (accepted challenge or rematch) always takes over the screen.
         set({ game: g });
         navigate({ name: "game" });

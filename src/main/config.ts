@@ -4,18 +4,17 @@ import { dirname, join } from "node:path";
 import type { AppConfig } from "../shared/bridge";
 
 export interface MainConfig extends AppConfig {
-  /** Last hub address that worked ("192.168.1.20:47800"), tried first next time. */
-  lastHub: string | null;
+  /** Last peer address that worked ("192.168.1.20:47800"), tried first next time. */
+  lastPeer: string | null;
   bounds: { x?: number; y?: number; width: number; height: number; maximized?: boolean } | null;
 }
 
 const DEFAULTS: MainConfig = {
   player: null,
-  role: null,
-  hubAddress: null,
+  peerAddress: null,
   // Challenges can only pop up if the app is running, so start at login by default.
   startAtLogin: true,
-  lastHub: null,
+  lastPeer: null,
   bounds: null,
 };
 
@@ -26,7 +25,14 @@ let cache: MainConfig | null = null;
 export function loadConfig(): MainConfig {
   if (cache) return cache;
   try {
-    cache = { ...DEFAULTS, ...JSON.parse(readFileSync(file(), "utf8")) };
+    const raw = JSON.parse(readFileSync(file(), "utf8"));
+    // 3.0.x stored "hubAddress"/"lastHub" and a host/join role (now gone).
+    raw.peerAddress ??= raw.hubAddress ?? null;
+    raw.lastPeer ??= raw.lastHub ?? null;
+    delete raw.hubAddress;
+    delete raw.lastHub;
+    delete raw.role;
+    cache = { ...DEFAULTS, ...raw };
   } catch {
     cache = { ...DEFAULTS };
   }
@@ -44,5 +50,5 @@ export function saveConfig(patch: Partial<MainConfig>): MainConfig {
 
 /** The subset the renderer sees. */
 export function publicConfig(c: MainConfig = loadConfig()): AppConfig {
-  return { player: c.player, role: c.role, hubAddress: c.hubAddress, startAtLogin: c.startAtLogin };
+  return { player: c.player, peerAddress: c.peerAddress, startAtLogin: c.startAtLogin };
 }

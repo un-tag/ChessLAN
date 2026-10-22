@@ -16,6 +16,7 @@ const bridge: DesktopBridge = {
   getConfig: () => ipcRenderer.invoke(IPC.getConfig),
   setConfig: (patch) => ipcRenderer.invoke(IPC.setConfig, patch),
   findHub: () => ipcRenderer.invoke(IPC.findHub),
+  onHubChanged: (cb) => listen(IPC.hubChanged, () => cb()),
   getLocalAddresses: () => ipcRenderer.invoke(IPC.localAddresses),
   isVisible: () => ipcRenderer.invoke(IPC.isVisible),
   onVisibility: (cb) => listen(IPC.visibility, cb),

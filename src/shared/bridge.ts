@@ -3,13 +3,10 @@
 // provides its own fallback implementation.
 import type { PlayerRef } from "./protocol";
 
-export type Role = "host" | "join";
-
 export interface AppConfig {
   player: PlayerRef | null;
-  role: Role | null;
-  /** Manually entered host address ("192.168.1.20" or "mac.local:47800"). */
-  hubAddress: string | null;
+  /** The other computer's address, only if discovery ever needs help ("192.168.1.20" or "mac.local:47800"). */
+  peerAddress: string | null;
   startAtLogin: boolean;
 }
 
@@ -32,8 +29,10 @@ export interface DesktopBridge {
   appVersion: string;
   getConfig(): Promise<AppConfig>;
   setConfig(patch: Partial<AppConfig>): Promise<AppConfig>;
-  /** Host role: the local hub. Join role: discovery on the LAN (outbound only). */
+  /** The hub to use: the elected referee's, or this app's own when alone. */
   findHub(): Promise<HubLocation | null>;
+  /** The referee changed: reconnect (findHub has the new answer). */
+  onHubChanged(cb: () => void): () => void;
   getLocalAddresses(): Promise<string[]>;
   isVisible(): Promise<boolean>;
   onVisibility(cb: (visible: boolean) => void): () => void;
@@ -53,6 +52,7 @@ export const IPC = {
   getConfig: "config:get",
   setConfig: "config:set",
   findHub: "hub:find",
+  hubChanged: "hub:changed",
   localAddresses: "hub:addresses",
   isVisible: "window:isVisible",
   visibility: "window:visibility",

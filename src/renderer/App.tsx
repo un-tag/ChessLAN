@@ -37,6 +37,8 @@ export function App() {
         if (action === "challenge-10") sendChallenge({ tc: TEN_MIN, color: "random", rated: true });
       }),
       platform.onUpdateStatus((update) => set({ update })),
+      // The referee changed (the other app appeared or left): reconnect.
+      platform.onHubChanged(() => connection.restart()),
     ];
     const unlock = () => unlockAudio();
     window.addEventListener("pointerdown", unlock, { once: true });
@@ -95,16 +97,9 @@ function TopBar({ screen }: { screen: Screen }) {
     { name: "settings", label: "Settings" },
   ];
   const opp = opponent(s);
+  const linked = s.conn === "connected" && !!opp?.online;
   const connText =
-    s.conn === "connected"
-      ? s.config?.role === "host"
-        ? "Hosting"
-        : `Connected to ${s.hub?.hostName || "host"}`
-      : s.conn === "mismatch"
-        ? "Updating…"
-        : s.config?.role === "host"
-          ? "Starting…"
-          : "Looking for host…";
+    s.conn === "mismatch" ? "Updating…" : s.conn !== "connected" ? "Starting…" : linked ? `With ${opp!.name}` : "On your own";
   return (
     <header className="topbar">
       <button className="brand" onClick={() => navigate({ name: "home" })}>
@@ -125,7 +120,7 @@ function TopBar({ screen }: { screen: Screen }) {
       </nav>
       <div className="topbar-right">
         <VoicePill opponentName={opp?.name} />
-        <span className={`conn-pill ${s.conn}`} title={s.hub?.host}>
+        <span className={`conn-pill ${linked ? "connected" : ""}`} data-conn={s.conn} title={s.hub?.host}>
           <span className="dot" /> {connText}
         </span>
       </div>

@@ -206,18 +206,18 @@ export function Home() {
 }
 
 function FirstConnectHint() {
-  const role = useStore((s) => s.config?.role);
   const [addresses, setAddresses] = useState<string[]>([]);
   useEffect(() => {
-    if (role === "host") void platform.getLocalAddresses().then(setAddresses);
-  }, [role]);
+    if (isDesktop) void platform.getLocalAddresses().then(setAddresses);
+  }, []);
   return (
     <p className="muted">
-      Waiting for your opponent's app to connect for the first time…
-      {role === "host" && addresses.length > 0 && (
+      Waiting for your opponent's app to turn up on this network for the first time…
+      {addresses.length > 0 && (
         <>
           {" "}
-          It finds this computer by itself; if it can't, enter <b>{addresses.join(", ")}</b> in its Settings.
+          The apps find each other by themselves; if they don't, enter <b>{addresses.join(", ")}</b> in the other
+          app's Settings.
         </>
       )}
     </p>
@@ -244,13 +244,8 @@ function OpponentStatus({ opp }: { opp: PlayerPresence }) {
 
 function ConnectionCard() {
   const conn = useStore((s) => s.conn);
-  const role = useStore((s) => s.config?.role);
   const mismatch = useStore((s) => s.mismatch);
   const update = useStore((s) => s.update);
-  const [addresses, setAddresses] = useState<string[]>([]);
-  useEffect(() => {
-    if (role === "host") void platform.getLocalAddresses().then(setAddresses);
-  }, [role]);
 
   if (conn === "connected") return null;
   if (conn === "mismatch") {
@@ -258,14 +253,12 @@ function ConnectionCard() {
       <section className="card notice">
         <h3>Updating…</h3>
         <p>
-          The host is running ChessLAN {mismatch?.hubVersion}.{" "}
+          The other computer has ChessLAN {mismatch?.hubVersion}.{" "}
           {update.state === "downloading"
             ? `Downloading the matching version (${Math.round(update.progress ?? 0)}%)…`
             : update.state === "ready"
               ? "Update ready — restarting…"
-              : mismatch?.winUpdateAvailable
-                ? "Fetching the matching version from the host…"
-                : "Ask the host to update ChessLAN on the Mac, then this app updates itself."}
+              : "This app updates itself to match as soon as it can."}
         </p>
       </section>
     );
@@ -273,25 +266,7 @@ function ConnectionCard() {
   return (
     <section className="card notice">
       <div className="spinner" />
-      {role === "host" ? (
-        <div>
-          <h3>Starting…</h3>
-          <p className="muted">Hosting games on this computer.</p>
-        </div>
-      ) : (
-        <div>
-          <h3>Looking for the host on your Wi-Fi…</h3>
-          <p className="muted">
-            Make sure the Mac is on and ChessLAN is running there.{" "}
-            {isDesktop && (
-              <button className="link" onClick={() => navigate({ name: "settings" })}>
-                Enter its address
-              </button>
-            )}
-          </p>
-        </div>
-      )}
-      {role === "host" && addresses.length > 0 && <p className="muted small">This Mac: {addresses.join(", ")}</p>}
+      <h3>Starting…</h3>
     </section>
   );
 }
