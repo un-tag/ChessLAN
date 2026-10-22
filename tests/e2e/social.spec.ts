@@ -21,6 +21,22 @@ test("voice connects while both apps are open, and can be muted", async ({ alex,
   await expect(alex.page.getByTestId("voice")).toContainText("Voice with Sam");
 });
 
+test("each side sees when the other's mic is muted or blocked", async ({ alex, sam }) => {
+  await expect(sam.page.getByTestId("voice")).toContainText("Voice with Alex");
+  await alex.page.getByRole("button", { name: "Mute microphone" }).click();
+  await expect(sam.page.getByTestId("voice")).toContainText("Alex is muted");
+  await alex.page.getByRole("button", { name: "Unmute microphone" }).click();
+  await expect(sam.page.getByTestId("voice")).toHaveText(/^Voice with Alex/);
+  // Sam's computer refuses the microphone (permission denied).
+  await sam.page.context().addInitScript(() => {
+    navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException("Permission denied", "NotAllowedError"));
+  });
+  await sam.close();
+  await sam.open();
+  await expect(sam.page.getByTestId("voice")).toContainText("Your mic is blocked");
+  await expect(alex.page.getByTestId("voice")).toContainText("Sam's mic is blocked");
+});
+
 test("first launch asks for a name", async ({ browser, hub }) => {
   const page = await (await browser.newContext()).newPage();
   await page.goto(hub.url);

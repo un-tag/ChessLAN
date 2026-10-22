@@ -2,11 +2,13 @@
 // pointed at each other, and plays between the two windows. Needs a display:
 // run under xvfb on Linux.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 interface App {
+  name: string;
   app: ElectronApplication;
   page: Page;
   dir: string;
@@ -17,15 +19,32 @@ interface App {
 const ALEX_PORT = 47811;
 const SAM_PORT = 47812;
 
-async function launch(port: number, config: object): Promise<App> {
+async function launch(port: number, config: { player: { id: string; name: string }; peerAddress: string }): Promise<App> {
   const dir = mkdtempSync(join(tmpdir(), "chesslan-electron-"));
   writeFileSync(join(dir, "config.json"), JSON.stringify({ startAtLogin: false, ...config }));
   const args = [resolve("."), `--user-data-dir=${dir}`, "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"];
   if (process.getuid?.() === 0) args.push("--no-sandbox");
   const app = await electron.launch({ args, env: { ...process.env, CHESSLAN_PORT: String(port) } });
   const page = await app.firstWindow();
-  return { app, page, dir, port, closed: false };
+  return { name: config.player.name, app, page, dir, port, closed: false };
 }
+
+/** The app's process and all its children (renderer, GPU, network service...). */
+function processTree(pid: number): number[] {
+  const children = new Map<number, number[]>();
+  for (const line of execFileSync("ps", ["-e", "-o", "pid=,ppid="], { encoding: "utf8" }).trim().split("\n")) {
+    const [child, parent] = line.trim().split(/\s+/).map(Number);
+    children.set(parent, [...(children.get(parent) ?? []), child]);
+  }
+  const all = [pid];
+  for (let i = 0; i < all.length; i++) all.push(...(children.get(all[i]) ?? []));
+  return all;
+}
+
+/** Freezes the whole app, like a computer going to sleep: no socket gets closed. */
+const signalApp = (a: App, signal: "SIGSTOP" | "SIGCONT") => {
+  for (const pid of processTree(a.app.process().pid!)) process.kill(pid, signal);
+};
 
 async function quit(a: App): Promise<void> {
   if (!a.closed) await a.app.close();
@@ -98,6 +117,26 @@ test("closing the window keeps the app running in the tray", async () => {
   await alex.page.getByTestId("decline").click();
 });
 
+test("an app frozen like a sleeping computer shows as away within seconds, then comes back", async () => {
+  test.setTimeout(120_000);
+  // Freezing each in turn covers both the referee and the follower.
+  for (const [sleeper, watcher] of [
+    [alex, sam],
+    [sam, alex],
+  ]) {
+    await expect(watcher.page.locator(".conn-pill")).toContainText(`With ${sleeper.name}`, { timeout: 30_000 });
+    signalApp(sleeper, "SIGSTOP");
+    try {
+      await expect(watcher.page.getByText(`Can't reach ${sleeper.name}'s app`)).toBeVisible({ timeout: 20_000 });
+      await expect(watcher.page.locator(".conn-pill")).toContainText("On your own");
+    } finally {
+      signalApp(sleeper, "SIGCONT");
+    }
+    await expect(watcher.page.locator(".conn-pill")).toContainText(`With ${sleeper.name}`, { timeout: 30_000 });
+    await expect(watcher.page.getByText(`${sleeper.name} is here`)).toBeVisible();
+  }
+});
+
 test("when the referee quits, the other app carries on alone with the full history", async () => {
   test.setTimeout(60_000);
   const [referee, other] = (await nodeId(ALEX_PORT)) < (await nodeId(SAM_PORT)) ? [alex, sam] : [sam, alex];
@@ -110,6 +149,6 @@ test("when the referee quits, the other app carries on alone with the full histo
     await expect(alex.page.getByTestId("history")).toContainText("Level 1");
   } else {
     await sam.page.getByRole("button", { name: "Play", exact: true }).click();
-    await expect(sam.page.getByText("Alex's app isn't running")).toBeVisible();
+    await expect(sam.page.getByText("Can't reach Alex's app")).toBeVisible();
   }
 });

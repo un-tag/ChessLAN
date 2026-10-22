@@ -6,6 +6,7 @@ import type {
   ColorChoice,
   GameRecord,
   GameView,
+  MicState,
   PlayerPresence,
 } from "../../shared/protocol";
 import type { TimeControl } from "../../shared/timeControl";
@@ -86,6 +87,8 @@ export interface State {
   opponentId: string | null;
   /** A game against the computer is in progress (reported to the other player). */
   botGameLive: boolean;
+  /** This app's microphone during a call (reported to the other player). */
+  mic: MicState | null;
 }
 
 export const useStore = create<State>(() => ({
@@ -110,6 +113,7 @@ export const useStore = create<State>(() => ({
   remoteTalking: false,
   opponentId: null,
   botGameLive: false,
+  mic: null,
 }));
 
 export const get = useStore.getState;

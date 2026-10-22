@@ -99,6 +99,23 @@ headless Chromium.
   main process shows and focuses the window, flashes the taskbar or bounces
   the dock, plays a sound, and shows a native notification.
 
+### Knowing what the other side is doing
+
+- **Is the other app there:** a computer that sleeps, crashes or drops off
+  the Wi-Fi doesn't close its connections, so silence has to be noticed.
+  - Every hub pings every socket (players' UIs and peer links) every 2 s and
+    drops any that has been silent for 6 s.
+  - Every UI pings its hub every 2 s and reconnects if it gets no answer
+    for 6 s.
+  - So the other player shows as away within about 8 s, instead of
+    whenever TCP gives up (many minutes).
+- **What the home screen says:** "here" (window open), "online" (in the
+  tray: a challenge will pop up), "playing the computer", "in a game", or
+  "can't reach their app". The last one can't tell a closed app from a
+  sleeping computer, so it doesn't claim which.
+- **Challenge receipt:** see Starting a game.
+- **Microphone:** see Communication.
+
 ## Gameplay
 
 ### Starting a game
@@ -115,6 +132,11 @@ headless Chromium.
 - **Defaults:** random colour, rated.
 - **Accepting:** the challenged player gets a popup with Accept / Decline. The
   challenger can cancel.
+- **Receipt:** the challenged app tells the hub once the popup is actually
+  on screen (rendered, with the window visible). The challenger sees
+  "Sending to Sam…" until then, then "On Sam's screen". While Sam's app
+  can't be reached it says the challenge will pop up when it's back. The
+  receipt resets if Sam's app disconnects, since the popup has to show again.
 - **Who can be challenged:** either player can challenge the other at any
   time, except while one of them is in a live game.
   - Only a game actually in progress counts as busy, and the hub decides
@@ -259,6 +281,11 @@ headless Chromium.
   - **When it's live:** whenever **both** players have the app window open
     (not just the tray process), whether or not a game is on.
   - **Mute:** each side has a mute button. The mute state persists.
+  - **Mic status:** during a call each app reports its microphone state
+    with its presence: on, muted, blocked (permission denied), missing (no
+    microphone found) or not working (any other error, such as the device
+    being in use). The other player's voice pill shows it ("Sam is muted",
+    "Sam's mic is blocked"), and your own pill names your own mic's problem.
   - **Transport:** WebRTC audio with echo cancellation, noise suppression
     and auto gain, so speakers work. Signalling goes through the referee's
     hub, and the connection uses LAN host candidates with no STUN or TURN.
@@ -312,6 +339,7 @@ headless Chromium.
   - Time-control categories and Elo.
   - Hub game logic with a fake clock.
   - Peer sync (merging logs both ways, live pushes) and referee election.
+  - Dropping silent sockets, challenge receipts and mic status.
 - **End-to-end (Playwright, headless Chromium):**
   - A standalone hub serves the renderer, with two browser contexts as the
     two brothers.
@@ -325,6 +353,8 @@ headless Chromium.
   - A challenge played across both windows.
   - The bot's Web Worker loading from `file://`.
   - A challenge popping a window back up from the tray.
+  - An app frozen like a sleeping computer (SIGSTOP) showing as away within
+    seconds, on either side of the election, and coming back on SIGCONT.
   - Falling back to solo when the referee quits.
 - **CI** runs all three on Linux. Release builds run on macOS and Windows
   runners.

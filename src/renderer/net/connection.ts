@@ -2,7 +2,9 @@
 // dispatching server messages into the store.
 import {
   CHALLENGE_TTL_MS,
+  HEARTBEAT_MS,
   PROTOCOL,
+  SILENT_MS,
   type Challenge,
   type ChallengeSpec,
   type ClientMessage,
@@ -22,6 +24,8 @@ class Connection {
   private ws: WebSocket | null = null;
   private retryMs = 500;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
+  /** When we started waiting for the hub to answer (0: it has). */
+  private unansweredSince = 0;
   private started = false;
   private bestRtt = Infinity;
   private listeners = new Set<Listener>();
@@ -49,11 +53,20 @@ class Connection {
     return true;
   }
 
-  /** Drops the connection and reconnects soon (after name/role/address changes). */
+  /** Drops the connection and reconnects soon (the referee changed, or the name). */
   restart(): void {
     this.retryMs = 200;
-    if (this.ws) this.ws.close();
+    if (this.ws) this.drop(this.ws);
     else if (this.started) void this.connect();
+  }
+
+  /**
+   * Gives up on a socket now. Closing a dead one (the hub's computer went
+   * to sleep) can take a minute to report, so don't wait for it.
+   */
+  private drop(ws: WebSocket): void {
+    this.lost(ws);
+    ws.close();
   }
 
   get connected(): boolean {
@@ -87,6 +100,7 @@ class Connection {
       set({ hub: { hostName: "", hubId: "", version: "", host: loc!.host } });
     };
     ws.onmessage = (e) => {
+      if (this.ws === ws) this.unansweredSince = 0;
       let msg: ServerMessage;
       try {
         msg = JSON.parse(String(e.data));
@@ -96,21 +110,23 @@ class Connection {
       handle(msg);
       for (const l of this.listeners) l(msg);
     };
-    ws.onclose = (e) => {
-      if (this.ws !== ws) return;
-      this.ws = null;
-      this.stopPing();
-      voice.reset();
-      if (e.code === 4000) {
-        // The hub replaced us with a newer connection for the same player
-        // (the app opened elsewhere). Reconnecting would just kick that one off.
-        set({ conn: "idle", players: [], challenges: [] });
-        toast("ChessLAN was opened somewhere else for this player", "error");
-        return;
-      }
-      if (get().conn !== "mismatch") set({ conn: "searching", players: [], challenges: [] });
-      this.retry();
-    };
+    ws.onclose = (e) => this.lost(ws, e.code);
+  }
+
+  private lost(ws: WebSocket, code?: number): void {
+    if (this.ws !== ws) return;
+    this.ws = null;
+    this.stopPing();
+    voice.reset();
+    if (code === 4000) {
+      // The hub replaced us with a newer connection for the same player
+      // (the app opened elsewhere). Reconnecting would just kick that one off.
+      set({ conn: "idle", players: [], challenges: [] });
+      toast("ChessLAN was opened somewhere else for this player", "error");
+      return;
+    }
+    if (get().conn !== "mismatch") set({ conn: "searching", players: [], challenges: [] });
+    this.retry();
   }
 
   private retry(): void {
@@ -147,15 +163,24 @@ class Connection {
 
   sendPresence(): void {
     // Being in a game against each other is known to the hub already.
-    const { botGameLive, windowVisible } = get();
-    this.send({ type: "presence", windowOpen: windowVisible, activity: botGameLive ? "bot" : "idle" });
+    const { botGameLive, windowVisible, mic } = get();
+    this.send({ type: "presence", windowOpen: windowVisible, activity: botGameLive ? "bot" : "idle", mic });
   }
 
+  /** Pings for clock sync, and reconnects if the hub stops answering. */
   private startPing(): void {
     this.stopPing();
-    const ping = () => this.send({ type: "ping", t: Date.now(), rtt: get().rtt || undefined });
+    this.unansweredSince = 0;
+    const ping = () => {
+      const ws = this.ws;
+      if (!ws) return;
+      if (this.unansweredSince && Date.now() - this.unansweredSince > SILENT_MS) return this.drop(ws);
+      // Timed from the ping, so a throttled timer can't look like silence.
+      if (!this.unansweredSince) this.unansweredSince = Date.now();
+      this.send({ type: "ping", t: Date.now(), rtt: get().rtt || undefined });
+    };
     ping();
-    this.pingTimer = setInterval(ping, 2000);
+    this.pingTimer = setInterval(ping, HEARTBEAT_MS);
   }
 
   private stopPing(): void {

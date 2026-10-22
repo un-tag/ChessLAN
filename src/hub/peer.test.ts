@@ -11,10 +11,10 @@ const dirs: string[] = [];
 let a: Hub;
 let b: Hub;
 
-async function hub(): Promise<Hub> {
+async function hub(extra: { heartbeatMs?: number; silentMs?: number } = {}): Promise<Hub> {
   const dir = mkdtempSync(join(tmpdir(), "chesslan-peer-"));
   dirs.push(dir);
-  return startHub({ dataDir: dir, appVersion: "t", port: 0, host: "127.0.0.1" });
+  return startHub({ dataDir: dir, appVersion: "t", port: 0, host: "127.0.0.1", ...extra });
 }
 
 const record = (id: string, endedAt: number, result: GameRecord["result"] = "1-0"): GameRecord => ({
@@ -103,6 +103,20 @@ describe("peer sync", () => {
     await a.close();
     await until(() => b.linkedTo() === null);
     a = await hub(); // afterEach closes it
+  });
+
+  it("drops a peer link that goes silent", async () => {
+    await a.close();
+    a = await hub({ heartbeatMs: 40, silentMs: 150 });
+    // A peer that never answers pings, like a computer gone to sleep.
+    const asleep = new WebSocket(`ws://127.0.0.1:${a.port}/peer`, { autoPong: false });
+    await new Promise((r) => asleep.once("open", r));
+    await new Promise((r) => asleep.once("close", r));
+    // A live link stays up.
+    b.linkTo(`127.0.0.1:${a.port}`);
+    await until(() => b.linkedTo() !== null);
+    await new Promise((r) => setTimeout(r, 400));
+    expect(b.linkedTo()).toBe(`127.0.0.1:${a.port}`);
   });
 
   it("describes itself and answers reachability questions", async () => {

@@ -3,11 +3,15 @@
 import type { EndReason, Result, Side } from "./chess/game";
 import type { Category, TimeControl } from "./timeControl";
 
-export const PROTOCOL = 2;
+export const PROTOCOL = 3;
 export const HUB_PORT = 47800;
 export const ABANDON_MS = 60_000;
 /** How long a challenge waits, including for a player whose app isn't running yet. */
 export const CHALLENGE_TTL_MS = 10 * 60_000;
+/** Both ends of every socket check in this often... */
+export const HEARTBEAT_MS = 2000;
+/** ...and give up on the other end after this long without hearing from it. */
+export const SILENT_MS = 3 * HEARTBEAT_MS;
 
 export interface PlayerRef {
   id: string;
@@ -39,10 +43,19 @@ export interface GameRecord {
 /** "game" is decided by the hub from live games; apps only report "idle" or "bot". */
 export type Activity = "idle" | "game" | "bot";
 
+/**
+ * A player's microphone during a voice call: open, muted, or why it can't
+ * be used ("blocked": permission denied, "missing": none found, "failed":
+ * anything else, such as the device being in use). Null outside a call.
+ */
+export type MicState = "on" | "muted" | "blocked" | "missing" | "failed";
+export const MIC_STATES: readonly MicState[] = ["on", "muted", "blocked", "missing", "failed"];
+
 export interface PlayerPresence extends PlayerRef {
   online: boolean;
   windowOpen: boolean;
   activity: Activity;
+  mic: MicState | null;
 }
 
 export interface KnownPlayer extends PlayerRef {
@@ -83,6 +96,8 @@ export interface Challenge extends ChallengeSpec {
   from: PlayerRef;
   to: PlayerRef;
   createdAt: number;
+  /** When the challenged player's app put the popup on screen (hub time). */
+  shownAt?: number;
 }
 
 export interface ClockView {
@@ -133,11 +148,13 @@ export interface UpdateInfo {
 
 export type ClientMessage =
   | { type: "hello"; protocol: number; appVersion: string; player: PlayerRef; platform: string }
-  | { type: "presence"; windowOpen: boolean; activity: Activity }
+  | { type: "presence"; windowOpen: boolean; activity: Activity; mic: MicState | null }
   | { type: "ping"; t: number; rtt?: number }
   | { type: "challenge"; to: string; spec: ChallengeSpec }
   | { type: "challengeCancel"; id: string }
   | { type: "challengeRespond"; id: string; accept: boolean }
+  /** The challenged app has the popup on screen. */
+  | { type: "challengeShown"; id: string }
   | { type: "move"; gameId: string; uci: string; ply: number; thinkMs?: number }
   | { type: "resign"; gameId: string }
   | { type: "abort"; gameId: string }
