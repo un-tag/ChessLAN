@@ -41,9 +41,9 @@ export function App() {
     const unlock = () => unlockAudio();
     window.addEventListener("pointerdown", unlock, { once: true });
     window.addEventListener("keydown", unlock, { once: true });
-    // Tell the hub what we're doing whenever the screen changes.
+    // Tell the hub when a game against the computer starts or ends.
     const unsub = useStore.subscribe((s, prev) => {
-      if (s.screen.name !== prev.screen.name) connection.sendPresence();
+      if (s.botGameLive !== prev.botGameLive) connection.sendPresence();
     });
     return () => {
       offs.forEach((off) => off());

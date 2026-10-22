@@ -120,12 +120,9 @@ class Connection {
   }
 
   sendPresence(): void {
-    const { screen, windowVisible } = get();
-    this.send({
-      type: "presence",
-      windowOpen: windowVisible,
-      activity: screen.name === "game" ? "game" : screen.name === "bot" ? "bot" : "idle",
-    });
+    // Being in a game against each other is known to the hub already.
+    const { botGameLive, windowVisible } = get();
+    this.send({ type: "presence", windowOpen: windowVisible, activity: botGameLive ? "bot" : "idle" });
   }
 
   private startPing(): void {

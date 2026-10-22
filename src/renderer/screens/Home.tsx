@@ -33,7 +33,8 @@ export function Home() {
   const [botPicker, setBotPicker] = useState(false);
   const outgoing = s.challenges.find((c) => c.from.id === me);
   const connected = s.conn === "connected";
-  const canChallenge = connected && !!opp?.online && opp.activity !== "game" && !outgoing;
+  // Offline players can be challenged too: it pops up when their app opens.
+  const canChallenge = connected && !!opp && opp.activity !== "game" && !outgoing;
 
   const ratings = useMemo(() => computeRatings(s.records), [s.records]);
   const mine = ratingsFor(ratings, me);
@@ -75,7 +76,10 @@ export function Home() {
               <div className="waiting">
                 <div className="spinner" />
                 <span>
-                  Waiting for {outgoing.to.name} to accept · {formatTimeControl(outgoing.tc)}
+                  {opp?.online
+                    ? `Waiting for ${outgoing.to.name} to accept`
+                    : `${outgoing.to.name} will see it when ChessLAN opens`}{" "}
+                  · {formatTimeControl(outgoing.tc)}
                 </span>
                 <button className="btn" onClick={() => connection.send({ type: "challengeCancel", id: outgoing.id })}>
                   Cancel
@@ -222,11 +226,11 @@ function FirstConnectHint() {
 
 function OpponentStatus({ opp }: { opp: PlayerPresence }) {
   const status = !opp.online
-    ? { dot: "off", text: `${opp.name}'s app isn't running` }
+    ? { dot: "off", text: `${opp.name}'s app isn't running — a challenge will wait for it` }
     : opp.activity === "game"
       ? { dot: "busy", text: `${opp.name} is in a game` }
       : opp.activity === "bot"
-        ? { dot: "on", text: `${opp.name} is playing the computer` }
+        ? { dot: "on", text: `${opp.name} is playing the computer — you can still challenge` }
         : opp.windowOpen
           ? { dot: "on", text: `${opp.name} is here` }
           : { dot: "on", text: `${opp.name} is online — a challenge will pop up on their screen` };
@@ -292,7 +296,7 @@ function ConnectionCard() {
   );
 }
 
-function AdvancedModal({ onClose }: { onClose: () => void }) {
+export function AdvancedModal({ onClose }: { onClose: () => void }) {
   const [tc, setTc] = useState<TimeControl | null>(ONE_MIN);
   const [custom, setCustom] = useState(false);
   const [minutes, setMinutes] = useState(5);

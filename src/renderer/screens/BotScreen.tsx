@@ -8,7 +8,7 @@ import { Board, type PremoveSpec } from "../board/Board";
 import { ClockFace, MoveList, PlayerBar, captures, formatClock, lowTimeThreshold, useTicker } from "../components/common";
 import { saveRecord } from "../net/connection";
 import { moveSound, sounds } from "../sound";
-import { navigate, useStore } from "../state/store";
+import { navigate, set, useStore } from "../state/store";
 import { startBotGame } from "./BotPicker";
 import { reasonText, resultFor } from "./results";
 
@@ -174,6 +174,10 @@ export function BotScreen({ botId, tc, color }: { botId: string; tc: TimeControl
       setPremoves([]);
     }
   }
+
+  // Let the other player see we're busy with the computer (not blocking).
+  useEffect(() => set({ botGameLive: !over }), [over]);
+  useEffect(() => () => set({ botGameLive: false }), []);
 
   // The bot opens if it plays white.
   useEffect(() => {

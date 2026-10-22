@@ -84,6 +84,8 @@ export interface State {
   voice: VoiceStatus;
   remoteTalking: boolean;
   opponentId: string | null;
+  /** A game against the computer is in progress (reported to the other player). */
+  botGameLive: boolean;
 }
 
 export const useStore = create<State>(() => ({
@@ -107,6 +109,7 @@ export const useStore = create<State>(() => ({
   voice: "off",
   remoteTalking: false,
   opponentId: null,
+  botGameLive: false,
 }));
 
 export const get = useStore.getState;

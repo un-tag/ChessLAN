@@ -889,6 +889,15 @@ h4 {
   flex: 1;
 }
 
+.game-over-actions .waiting-inline {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.game-over-actions .waiting-inline .btn {
+  flex: none;
+}
+
 .reopen-result {
   position: absolute;
   bottom: 10px;

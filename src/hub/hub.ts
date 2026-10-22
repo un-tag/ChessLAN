@@ -184,6 +184,12 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     return s;
   };
 
+  const startChallenge = (ch: Challenge): void => {
+    const challengerWhite = ch.color === "white" ? true : ch.color === "black" ? false : Math.random() < 0.5;
+    const [white, black] = challengerWhite ? [ch.from, ch.to] : [ch.to, ch.from];
+    createSession(white, black, ch.tc, ch.rated);
+  };
+
   const withSession = (conn: Conn, gameId: string, fn: (s: GameSession, playerId: string) => ActionResult): void => {
     const s = sessions.get(gameId);
     if (!s || !conn.player) return send(conn, { type: "error", message: "Unknown game" });
@@ -203,18 +209,29 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     switch (msg.type) {
       case "presence":
         conn.windowOpen = !!msg.windowOpen;
-        conn.activity = msg.activity;
+        // Only live hub games count as "in a game"; a result screen doesn't.
+        conn.activity = msg.activity === "bot" ? "bot" : "idle";
         return broadcastPlayers();
       case "ping":
         if (typeof msg.rtt === "number" && msg.rtt >= 0) conn.rtt = conn.rtt ? conn.rtt * 0.7 + msg.rtt * 0.3 : msg.rtt;
         return send(conn, { type: "pong", t: msg.t, serverTime: clock.now() });
       case "challenge": {
+        // Known players can be challenged even if their app isn't running:
+        // the challenge pops up when it connects (until it expires).
         const target = store.players.get(msg.to);
-        if (!target || !conns.has(msg.to) || msg.to === me.id) {
-          return send(conn, { type: "error", message: "They're not online right now" });
-        }
+        if (!target || msg.to === me.id) return send(conn, { type: "error", message: "Unknown player" });
         if (activeSessionOf(me.id)) return send(conn, { type: "error", message: "Finish your current game first" });
         if (activeSessionOf(msg.to)) return send(conn, { type: "error", message: `${target.name} is in a game` });
+        const tcKey = (tc: TimeControl | null) => (tc ? `${tc.initialMs}+${tc.incrementMs}` : "none");
+        const rated = msg.spec.rated && !!msg.spec.tc;
+        // Both challenged each other with the same settings: just start.
+        const crossing = [...challenges.values()].find(
+          (c) => c.from.id === msg.to && c.to.id === me.id && tcKey(c.tc) === tcKey(msg.spec.tc) && c.rated === rated,
+        );
+        if (crossing) {
+          removeChallenge(crossing.id);
+          return startChallenge(crossing);
+        }
         for (const ch of [...challenges.values()]) if (ch.from.id === me.id) removeChallenge(ch.id);
         const ch: Challenge = {
           id: randomUUID(),
@@ -222,7 +239,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
           to: { id: target.id, name: target.name },
           tc: msg.spec.tc,
           color: msg.spec.color,
-          rated: msg.spec.rated && !!msg.spec.tc,
+          rated,
           createdAt: clock.now(),
         };
         challenges.set(ch.id, ch);
@@ -255,11 +272,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
           sendChallenges();
           return send(conn, { type: "error", message: `${ch.from.name} went offline` });
         }
-        const challengerWhite =
-          ch.color === "white" ? true : ch.color === "black" ? false : Math.random() < 0.5;
-        const [white, black] = challengerWhite ? [ch.from, ch.to] : [ch.to, ch.from];
-        createSession(white, black, ch.tc, ch.rated);
-        return;
+        return startChallenge(ch);
       }
       case "move":
         return withSession(conn, msg.gameId, (s, id) => s.move(id, msg.uci, msg.ply, msg.thinkMs));
